@@ -1,0 +1,44 @@
+# ---- DWA Local Planner 参数 (Bunker Mini 履带差速底盘) ----
+DWAPlannerROS:
+  # ---- 速度限制 ----
+  max_vel_x: 0.5
+  min_vel_x: 0.0
+  max_vel_y: 0.0
+  min_vel_y: 0.0
+  max_vel_trans: 0.5
+  min_vel_trans: 0.0
+  max_vel_theta: 0.6
+  min_vel_theta: 0.0
+
+  # ---- 加速度限制 ----
+  acc_lim_x: 0.5
+  acc_lim_y: 0.0
+  acc_lim_theta: 1.0
+
+  # ---- 速度采样 ----
+  vx_samples: 20
+  vy_samples: 1
+  vth_samples: 40
+
+  # ---- 轨迹前向仿真 ----
+  sim_time: 3.0
+  sim_granularity: 0.025
+  angular_sim_granularity: 0.025
+
+  # ---- 目标容差 ----
+  xy_goal_tolerance: 0.30
+  yaw_goal_tolerance: 0.5
+  latch_xy_goal_tolerance: true
+
+  # ---- 代价函数权重 ----
+  path_distance_bias: 0.1
+  goal_distance_bias: 0.1
+  occdist_scale: 0.2
+  forward_point_distance: 0.325
+  stop_time_buffer: 0.2
+  scaling_speed: 0.25
+  max_scaling_factor: 0.2
+
+  # ---- 振荡抑制 ----
+  oscillation_reset_dist: 0.05
+  oscillation_reset_angle: 0.2

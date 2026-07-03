@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>race_mission</name>
+  <version>0.0.1</version>
+  <description>Top-level mission control and start/light vision nodes for the delivery race.</description>
+
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+</package>

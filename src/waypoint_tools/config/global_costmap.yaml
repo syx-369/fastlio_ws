@@ -1,0 +1,12 @@
+# ---- 全局 costmap ----
+# 不加载静态地图，因为锥筒在建图时不存在
+global_costmap:
+  global_frame: map
+  robot_base_frame: body
+  update_frequency: 1.0
+  publish_frequency: 0.5
+  static_map: false
+  rolling_window: true
+  width: 30.0
+  height: 30.0
+  resolution: 0.10

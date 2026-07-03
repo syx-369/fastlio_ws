@@ -1,0 +1,50 @@
+<launch>
+  <!-- Start this after base, Livox, S-FAST_LIO relocalization, and Piper arm stack are running. -->
+
+  <arg name="csv_path" default=""/>
+  <arg name="target_speed" default="0.45"/>
+  <arg name="cmd_topic" default="/cmd_vel"/>
+  <arg name="vehicle_model" default="ackermann"/>
+  <arg name="wheelbase" default="0.65"/>
+  <arg name="max_steer_angle" default="0.461"/>
+  <arg name="enable_final_yaw_align" default="false"/>
+  <arg name="wait_for_start" default="true"/>
+  <arg name="auto_start" default="false"/>
+
+  <arg name="enable_vision" default="true"/>
+  <arg name="show_image" default="true"/>
+  <arg name="traffic_weights" default="/home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt"/>
+
+  <node if="$(arg enable_vision)"
+        pkg="race_mission"
+        type="start_light_vision_node.py"
+        name="start_light_vision_node"
+        output="screen">
+    <param name="weights" value="$(arg traffic_weights)"/>
+    <param name="show_image" value="$(arg show_image)"/>
+    <param name="initial_mode" value="flag"/>
+    <param name="flag_confirm_frames" value="5"/>
+    <param name="flag_min_area" value="3000"/>
+  </node>
+
+  <node pkg="race_mission"
+        type="race_mission_manager.py"
+        name="race_mission_manager"
+        output="screen">
+    <param name="csv_path" value="$(arg csv_path)"/>
+    <param name="target_speed" value="$(arg target_speed)"/>
+    <param name="wait_for_start" value="$(arg wait_for_start)"/>
+    <param name="auto_start" value="$(arg auto_start)"/>
+    <param name="cmd_topic" value="$(arg cmd_topic)"/>
+    <param name="vehicle_model" value="$(arg vehicle_model)"/>
+    <param name="wheelbase" value="$(arg wheelbase)"/>
+    <param name="max_steer_angle" value="$(arg max_steer_angle)"/>
+    <param name="enable_final_yaw_align" value="$(arg enable_final_yaw_align)"/>
+    <param name="arm_tasks" value="pick,place"/>
+    <param name="traffic_light_tasks" value="traffic_light"/>
+    <param name="finish_task_name" value="finish"/>
+    <param name="traffic_timeout" value="120.0"/>
+    <param name="traffic_timeout_policy" value="hold"/>
+    <param name="finish_done_delay" value="8.0"/>
+  </node>
+</launch>

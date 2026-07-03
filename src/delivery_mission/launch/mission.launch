@@ -1,0 +1,22 @@
+<launch>
+  <!-- 参数 -->
+  <arg name="csv_path" default=""/>
+  <arg name="target_speed" default="0.5"/>
+  <arg name="weights" default="/home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt"/>
+  <arg name="show_image" default="true"/>
+
+  <!-- 统一视觉节点（红旗 + 红绿灯） -->
+  <node name="vision_node" pkg="delivery_mission" type="vision_node.py" output="screen">
+    <param name="weights" value="$(arg weights)"/>
+    <param name="conf" value="0.4"/>
+    <param name="show_image" value="$(arg show_image)"/>
+    <param name="flag_confirm_frames" value="5"/>
+    <param name="flag_min_area" value="3000"/>
+  </node>
+
+  <!-- 任务控制器 -->
+  <node name="mission_controller" pkg="delivery_mission" type="mission_controller.py" output="screen">
+    <param name="csv_path" value="$(arg csv_path)"/>
+    <param name="target_speed" value="$(arg target_speed)"/>
+  </node>
+</launch>

@@ -1,0 +1,58 @@
+<launch>
+  <!-- ============================================================
+       DWA 导航 launch
+       用法: roslaunch waypoint_tools dwa_navigation.launch csv_path:=/path/to/waypoints.csv
+       前提: sfast_lio relocalization 已经在运行
+       ============================================================ -->
+
+  <!-- 参数 -->
+  <arg name="csv_path"   default="" />
+  <arg name="scan_topic" default="/scan" />
+
+  <!-- ============ 1. 点云转 LaserScan ============ -->
+  <node pkg="pointcloud_to_laserscan" type="pointcloud_to_laserscan_node"
+        name="pc2_to_laserscan" output="screen">
+    <remap from="cloud_in" to="/cloud_registered_body" />
+    <remap from="scan"     to="$(arg scan_topic)" />
+    <param name="target_frame"    value="body" />
+    <param name="min_height"      value="0.15" />
+    <param name="max_height"      value="0.8" />
+    <param name="angle_min"       value="-3.14159" />
+    <param name="angle_max"       value="3.14159" />
+    <param name="angle_increment" value="0.00872" />
+    <param name="scan_time"       value="0.1" />
+    <param name="range_min"       value="0.3" />
+    <param name="range_max"       value="15.0" />
+    <param name="use_inf"         value="true" />
+    <param name="inf_epsilon"     value="1.0" />
+  </node>
+
+  <!-- ============ 2. move_base (DWA) ============ -->
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <!-- 顶层参数 -->
+    <rosparam file="$(find waypoint_tools)/config/move_base_dwa.yaml" command="load" />
+    <!-- 公共 costmap -->
+    <rosparam file="$(find waypoint_tools)/config/costmap_common.yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find waypoint_tools)/config/costmap_common.yaml" command="load" ns="local_costmap" />
+    <!-- 各自 costmap -->
+    <rosparam file="$(find waypoint_tools)/config/global_costmap.yaml" command="load" />
+    <rosparam file="$(find waypoint_tools)/config/local_costmap.yaml"  command="load" />
+    <!-- DWA -->
+    <rosparam file="$(find waypoint_tools)/config/dwa_local_planner.yaml" command="load" />
+    <!-- 速度输出 remap -->
+    <remap from="cmd_vel" to="/smoother_cmd_vel" />
+    <remap from="odom"    to="/Odometry" />
+  </node>
+
+  <!-- ============ 3. 航迹点发送器 ============ -->
+  <node pkg="waypoint_tools" type="waypoint_sender.py" name="waypoint_sender" output="screen">
+    <param name="csv_path"  value="$(arg csv_path)" />
+    <param name="odom_topic" value="/Odometry" />
+    <param name="task_event_topic" value="/waypoint_task_event" />
+    <param name="task_done_topic"  value="/waypoint_task_done" />
+    <param name="unknown_task_policy" value="skip" />
+    <param name="external_task_timeout" value="1.0" />
+    <param name="goal_tolerance" value="0.30" />
+  </node>
+
+</launch>

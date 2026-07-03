@@ -1,0 +1,63 @@
+# ---- TEB Local Planner 参数 ----
+TebLocalPlannerROS:
+  # ---- 轨迹 ----
+  teb_autosize: true
+  dt_ref: 0.3
+  dt_hysteresis: 0.1
+  global_plan_overwrite_orientation: true
+  max_global_plan_lookahead_dist: 3.0
+  feasibility_check_no_poses: 5
+
+  # ---- 机器人运动学（差速底盘 Bunker）----
+  max_vel_x: 0.3
+  max_vel_x_backwards: 0.1
+  max_vel_theta: 0.6
+  acc_lim_x: 0.5
+  acc_lim_theta: 1.0
+  min_turning_radius: 0.0        # 差速底盘可以原地转
+  footprint_model:
+    type: "polygon"
+    vertices: [[-0.30, -0.25], [-0.30, 0.25], [0.30, 0.25], [0.30, -0.25]]
+
+  # ---- 目标到达容差 ----
+  xy_goal_tolerance: 0.30
+  yaw_goal_tolerance: 0.5
+  free_goal_vel: true
+
+  # ---- 障碍物 ----
+  min_obstacle_dist: 0.1
+  include_costmap_obstacles: true
+  costmap_obstacles_behind_robot_dist: 1.0
+  obstacle_poses_affected: 30
+  costmap_converter_plugin: ""
+  costmap_converter_spin_thread: true
+  costmap_converter_rate: 5
+
+  # ---- 优化 ----
+  no_inner_iterations: 5
+  no_outer_iterations: 4
+  optimization_activate: true
+  optimization_verbose: false
+  penalty_epsilon: 0.1
+  weight_max_vel_x: 2
+  weight_max_vel_theta: 1
+  weight_acc_lim_x: 1
+  weight_acc_lim_theta: 1
+  weight_kinematics_nh: 1000      # 非完整约束权重（差速底盘设大）
+  weight_kinematics_forward_drive: 5
+  weight_kinematics_turning_radius: 1
+  weight_optimaltime: 1
+  weight_obstacle: 30
+  weight_dynamic_obstacle: 10
+
+  # ---- 并行规划（多条候选轨迹绕障）----
+  enable_homotopy_class_planning: true 
+  enable_multithreading: true
+  max_number_classes: 4
+  selection_cost_hysteresis: 1.0
+  selection_obst_cost_scale: 100.0
+  selection_alternative_time_cost: false
+
+  # ---- 其他 ----
+  odom_topic: /Odometry
+  map_frame: map

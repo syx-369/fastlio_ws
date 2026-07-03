@@ -1,0 +1,17 @@
+# ---- 公共 costmap 参数 ----
+obstacle_range: 4.0
+raytrace_range: 5.0
+footprint: [[-0.30, -0.25], [-0.30, 0.25], [0.30, 0.25], [0.30, -0.25]]
+# Bunker 底盘大约 0.60m x 0.50m，上面的 footprint 留了一点余量
+
+inflation_radius: 0.10
+cost_scaling_factor: 10.0
+
+observation_sources: scan
+scan:
+  sensor_frame: body
+  data_type: LaserScan
+  topic: /scan
+  marking: true
+  clearing: true
+  expected_update_rate: 5.0

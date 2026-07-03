@@ -1,0 +1,71 @@
+<launch>
+  <!-- ============================================================
+       mission_teb.launch
+       基于 mission.launch 全部功能，增加 TEB 避障切换
+       用法: roslaunch delivery_mission mission_teb.launch csv_path:=/path/to/waypoints.csv
+       ============================================================ -->
+
+  <!-- 参数 -->
+  <arg name="csv_path"      default=""/>
+  <arg name="target_speed"  default="0.5"/>
+  <arg name="weights"       default="/home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt"/>
+  <arg name="show_image"    default="true"/>
+  <arg name="scan_topic"    default="/scan"/>
+
+  <!-- ============ 1. 视觉节点（红旗 + 红绿灯） ============ -->
+  <node name="vision_node" pkg="delivery_mission" type="vision_node.py" output="screen">
+    <param name="weights"    value="$(arg weights)"/>
+    <param name="conf"       value="0.4"/>
+    <param name="show_image" value="$(arg show_image)"/>
+    <param name="flag_confirm_frames" value="5"/>
+    <param name="flag_min_area"       value="3000"/>
+  </node>
+
+  <!-- ============ 2. 任务控制器 ============ -->
+  <!-- 注意: pure_pursuit 的 cmd_topic 改为 /pp_cmd_vel，由 planner_switch 转发 -->
+  <node name="mission_controller" pkg="delivery_mission" type="mission_controller_teb.py" output="screen">
+    <param name="csv_path"     value="$(arg csv_path)"/>
+    <param name="target_speed" value="$(arg target_speed)"/>
+  </node>
+
+  <!-- ============ 3. 点云转 LaserScan ============ -->
+  <node pkg="pointcloud_to_laserscan" type="pointcloud_to_laserscan_node"
+        name="pc2_to_laserscan" output="screen">
+    <remap from="cloud_in" to="/cloud_registered_body"/>
+    <remap from="scan"     to="$(arg scan_topic)"/>
+    <param name="target_frame"    value="body"/>
+    <param name="min_height"      value="-0.1"/>
+    <param name="max_height"      value="0.8"/>
+    <param name="angle_min"       value="-3.14159"/>
+    <param name="angle_max"       value="3.14159"/>
+    <param name="angle_increment" value="0.00872"/>
+    <param name="scan_time"       value="0.1"/>
+    <param name="range_min"       value="0.3"/>
+    <param name="range_max"       value="15.0"/>
+    <param name="use_inf"         value="true"/>
+    <param name="inf_epsilon"     value="1.0"/>
+  </node>
+
+  <!-- ============ 4. move_base (TEB) ============ -->
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <rosparam file="$(find waypoint_tools)/config/move_base.yaml"          command="load"/>
+    <rosparam file="$(find waypoint_tools)/config/costmap_common.yaml"     command="load" ns="global_costmap"/>
+    <rosparam file="$(find waypoint_tools)/config/costmap_common.yaml"     command="load" ns="local_costmap"/>
+    <rosparam file="$(find waypoint_tools)/config/global_costmap.yaml"     command="load"/>
+    <rosparam file="$(find waypoint_tools)/config/local_costmap.yaml"      command="load"/>
+    <rosparam file="$(find waypoint_tools)/config/teb_local_planner.yaml"  command="load"/>
+    <!-- TEB 输出到 /teb_cmd_vel，由 planner_switch 决定是否转发 -->
+    <remap from="cmd_vel" to="/teb_cmd_vel"/>
+    <remap from="odom"    to="/Odometry"/>
+  </node>
+
+  <!-- ============ 5. Planner Switch 切换节点 ============ -->
+  <node name="planner_switch" pkg="delivery_mission" type="planner_switch.py" output="screen">
+    <param name="obstacle_dist"     value="1.2"/>   <!-- 触发TEB的障碍物距离(m) -->
+    <param name="clear_dist"        value="1.5        "/>   <!-- 切回pure_pursuit的安全距离(m) -->
+    <param name="forward_angle"     value="120.0"/>  <!-- 前方检测扇形角度(度) -->
+    <param name="switch_cooldown"   value="2.0"/>   <!-- 切换冷却时间(s) -->
+    <param name="goal_forward_dist" value="2.0"/>   <!-- 切换TEB时目标点前投距离(m) -->
+  </node>
+
+</launch>
