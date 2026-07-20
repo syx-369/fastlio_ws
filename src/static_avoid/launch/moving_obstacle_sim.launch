@@ -1,0 +1,35 @@
+<launch>
+  <arg name="path" default="$(find static_avoid)/paths/active/static_obstacle_sim.csv" />
+
+  <node pkg="static_avoid"
+        type="static_obstacle_simulator.py"
+        name="static_obstacle_simulator"
+        clear_params="true"
+        output="screen">
+    <param name="cmd_topic" value="/smoother_cmd_vel" />
+    <param name="use_default_obstacle" value="false" />
+    <param name="moving_obstacle" value="true" />
+    <param name="moving_obstacle_x" value="3.5" />
+    <param name="moving_obstacle_center_y" value="0.0" />
+    <param name="moving_obstacle_amplitude" value="1.40" />
+    <param name="moving_obstacle_motion" value="cross_once" />
+    <param name="moving_obstacle_start_delay" value="6.0" />
+    <param name="moving_obstacle_period" value="8.0" />
+    <param name="moving_obstacle_radius" value="0.30" />
+  </node>
+
+  <include file="$(find static_avoid)/launch/static_obstacle_test.launch">
+    <arg name="csv_path" value="$(arg path)" />
+    <arg name="cmd_topic" value="/smoother_cmd_vel" />
+    <arg name="target_speed" value="0.08" />
+    <arg name="enabled" value="true" />
+    <arg name="zone_mode" value="true" />
+    <arg name="use_raw_livox_safety" value="false" />
+    <arg name="obstacle_memory_time" value="0.70" />
+    <arg name="plan_rate" value="5.0" />
+    <arg name="blocked_retry_rate" value="4.0" />
+    <arg name="safety_slow_distance" value="1.00" />
+    <arg name="safety_stop_distance" value="0.45" />
+    <arg name="safety_clear_hold_time" value="1.00" />
+  </include>
+</launch>

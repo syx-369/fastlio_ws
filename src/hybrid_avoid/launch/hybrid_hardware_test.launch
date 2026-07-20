@@ -1,0 +1,27 @@
+<launch>
+  <!-- Low-speed hardware test. This launch directly publishes to the Bunker input. -->
+  <arg name="csv_path" />
+  <arg name="odom_topic" default="/Odometry" />
+  <arg name="cloud_topic" default="/cloud_registered_body" />
+  <arg name="raw_livox_topic" default="/livox/lidar" />
+  <arg name="world_frame" default="camera_init" />
+  <arg name="target_speed" default="0.05" />
+  <arg name="local_goal_distance" default="4.5" />
+  <arg name="lane_half_width" default="0.0" />
+  <arg name="enabled" default="false" />
+
+  <include file="$(find hybrid_avoid)/launch/hybrid_component.launch">
+    <arg name="csv_path" value="$(arg csv_path)" />
+    <arg name="odom_topic" value="$(arg odom_topic)" />
+    <arg name="cloud_topic" value="$(arg cloud_topic)" />
+    <arg name="raw_livox_topic" value="$(arg raw_livox_topic)" />
+    <arg name="cmd_topic" value="/smoother_cmd_vel" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="target_speed" value="$(arg target_speed)" />
+    <arg name="local_goal_distance" value="$(arg local_goal_distance)" />
+    <arg name="lane_half_width" value="$(arg lane_half_width)" />
+    <arg name="use_raw_livox_safety" value="true" />
+    <arg name="use_raw_livox_planning" value="true" />
+    <arg name="enabled" value="$(arg enabled)" />
+  </include>
+</launch>

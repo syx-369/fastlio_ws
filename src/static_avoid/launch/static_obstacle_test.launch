@@ -1,0 +1,42 @@
+<launch>
+  <!-- Hardware test launch: directly controls the Bunker driver. -->
+  <arg name="csv_path" />
+  <arg name="odom_topic" default="/Odometry" />
+  <arg name="cloud_topic" default="/cloud_registered_body" />
+  <arg name="cmd_topic" default="/smoother_cmd_vel" />
+  <arg name="world_frame" default="camera_init" />
+  <arg name="target_speed" default="0.12" />
+  <arg name="planning_horizon" default="5.0" />
+  <arg name="enabled" default="false" />
+  <arg name="zone_mode" default="true" />
+  <arg name="use_raw_livox_safety" default="true" />
+  <arg name="raw_livox_topic" default="/livox/lidar" />
+  <arg name="obstacle_memory_time" default="12.0" />
+  <arg name="plan_rate" default="2.0" />
+  <arg name="blocked_retry_rate" default="1.0" />
+  <arg name="safety_slow_distance" default="0.85" />
+  <arg name="safety_stop_distance" default="0.30" />
+  <arg name="safety_clear_hold_time" default="0.80" />
+  <arg name="lane_half_width" default="0.0" />
+
+  <include file="$(find static_avoid)/launch/static_obstacle_component.launch">
+    <arg name="csv_path" value="$(arg csv_path)" />
+    <arg name="odom_topic" value="$(arg odom_topic)" />
+    <arg name="cloud_topic" value="$(arg cloud_topic)" />
+    <arg name="cmd_topic" value="$(arg cmd_topic)" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="target_speed" value="$(arg target_speed)" />
+    <arg name="planning_horizon" value="$(arg planning_horizon)" />
+    <arg name="enabled" value="$(arg enabled)" />
+    <arg name="zone_mode" value="$(arg zone_mode)" />
+    <arg name="use_raw_livox_safety" value="$(arg use_raw_livox_safety)" />
+    <arg name="raw_livox_topic" value="$(arg raw_livox_topic)" />
+    <arg name="obstacle_memory_time" value="$(arg obstacle_memory_time)" />
+    <arg name="plan_rate" value="$(arg plan_rate)" />
+    <arg name="blocked_retry_rate" value="$(arg blocked_retry_rate)" />
+    <arg name="safety_slow_distance" value="$(arg safety_slow_distance)" />
+    <arg name="safety_stop_distance" value="$(arg safety_stop_distance)" />
+    <arg name="safety_clear_hold_time" value="$(arg safety_clear_hold_time)" />
+    <arg name="lane_half_width" value="$(arg lane_half_width)" />
+  </include>
+</launch>

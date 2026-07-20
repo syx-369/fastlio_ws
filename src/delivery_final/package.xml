@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>delivery_final</name>
+  <version>0.0.1</version>
+  <description>Final-round mission integration and launch package.</description>
+
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>static_avoid</exec_depend>
+</package>

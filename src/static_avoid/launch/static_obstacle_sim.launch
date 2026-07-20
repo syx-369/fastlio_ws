@@ -1,0 +1,23 @@
+<launch>
+  <arg name="path" default="$(find static_avoid)/paths/active/static_obstacle_sim.csv" />
+  <arg name="obstacle_x" default="3.5" />
+  <arg name="obstacle_y" default="0.0" />
+
+  <node pkg="static_avoid"
+        type="static_obstacle_simulator.py"
+        name="static_obstacle_simulator"
+        clear_params="true"
+        output="screen">
+    <param name="obstacle_x" value="$(arg obstacle_x)" />
+    <param name="obstacle_y" value="$(arg obstacle_y)" />
+    <param name="cmd_topic" value="/smoother_cmd_vel" />
+  </node>
+
+  <include file="$(find static_avoid)/launch/static_obstacle_test.launch">
+    <arg name="csv_path" value="$(arg path)" />
+    <arg name="cmd_topic" value="/smoother_cmd_vel" />
+    <arg name="target_speed" value="0.16" />
+    <arg name="enabled" value="true" />
+    <arg name="use_raw_livox_safety" value="false" />
+  </include>
+</launch>

@@ -1,0 +1,32 @@
+<launch>
+  <!-- Low-speed hardware test for a remotely moved soft obstacle. -->
+  <arg name="csv_path" />
+  <arg name="odom_topic" default="/Odometry" />
+  <arg name="cloud_topic" default="/cloud_registered_body" />
+  <arg name="raw_livox_topic" default="/livox/lidar" />
+  <arg name="world_frame" default="camera_init" />
+  <arg name="target_speed" default="0.06" />
+  <arg name="planning_horizon" default="5.0" />
+  <arg name="enabled" default="false" />
+  <arg name="lane_half_width" default="0.0" />
+
+  <include file="$(find static_avoid)/launch/static_obstacle_test.launch">
+    <arg name="csv_path" value="$(arg csv_path)" />
+    <arg name="odom_topic" value="$(arg odom_topic)" />
+    <arg name="cloud_topic" value="$(arg cloud_topic)" />
+    <arg name="raw_livox_topic" value="$(arg raw_livox_topic)" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="target_speed" value="$(arg target_speed)" />
+    <arg name="planning_horizon" value="$(arg planning_horizon)" />
+    <arg name="enabled" value="$(arg enabled)" />
+    <arg name="lane_half_width" value="$(arg lane_half_width)" />
+    <arg name="zone_mode" value="true" />
+    <arg name="use_raw_livox_safety" value="true" />
+    <arg name="obstacle_memory_time" value="1.20" />
+    <arg name="plan_rate" value="5.0" />
+    <arg name="blocked_retry_rate" value="4.0" />
+    <arg name="safety_slow_distance" value="1.00" />
+    <arg name="safety_stop_distance" value="0.45" />
+    <arg name="safety_clear_hold_time" value="1.00" />
+  </include>
+</launch>

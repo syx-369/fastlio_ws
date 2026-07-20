@@ -43,8 +43,8 @@ class PurePursuitOnlyFollower:
 
         # ---------------- Speed and tracking params ----------------
         # target_speed/max_linear 可以启动时传参，也可以运行中 rosparam set 修改。
-        self.target_speed = float(rospy.get_param("~target_speed", 0.20))
-        self.max_linear = float(rospy.get_param("~max_linear", 0.30))
+        self.target_speed = float(rospy.get_param("~target_speed", 1.00))
+        self.max_linear = float(rospy.get_param("~max_linear", 1.50))
         self.max_linear_accel = float(rospy.get_param("~max_linear_accel", 0.15))
         self.max_angular = float(rospy.get_param("~max_angular", 0.80))
 

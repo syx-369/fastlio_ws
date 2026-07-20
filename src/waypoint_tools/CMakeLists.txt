@@ -165,11 +165,11 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/record_waypoints.py
   scripts/follow_waypoints.py
-  scripts/follow_waypoints_astar.py
   scripts/waypoint_sender.py
   scripts/pure_pursuit_follower.py
   scripts/pure_pursuit_only_follower.py
   scripts/pure_pursuit_astar_follower.py
+  scripts/avoidance_zone_astar_test.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 ## Mark executables for installation

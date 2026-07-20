@@ -1,0 +1,35 @@
+<launch>
+  <!-- Independent component mode: does not directly control the Bunker. -->
+  <arg name="csv_path" />
+  <arg name="odom_topic" default="/Odometry" />
+  <arg name="cloud_topic" default="/cloud_registered_body" />
+  <arg name="raw_livox_topic" default="/livox/lidar" />
+  <arg name="cmd_topic" default="/hybrid_avoid/cmd_vel" />
+  <arg name="world_frame" default="camera_init" />
+  <arg name="target_speed" default="0.12" />
+  <arg name="local_goal_distance" default="4.5" />
+  <arg name="lane_half_width" default="0.0" />
+  <arg name="use_raw_livox_safety" default="false" />
+  <arg name="use_raw_livox_planning" default="false" />
+  <arg name="enabled" default="false" />
+
+  <node pkg="hybrid_avoid"
+        type="hybrid_avoidance_node.py"
+        name="hybrid_avoid"
+        output="screen"
+        clear_params="true">
+    <rosparam command="load" file="$(find hybrid_avoid)/config/hybrid_avoid.yaml" />
+    <param name="csv_path" value="$(arg csv_path)" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="cloud_topic" value="$(arg cloud_topic)" />
+    <param name="raw_livox_topic" value="$(arg raw_livox_topic)" />
+    <param name="cmd_topic" value="$(arg cmd_topic)" />
+    <param name="world_frame" value="$(arg world_frame)" />
+    <param name="target_speed" value="$(arg target_speed)" />
+    <param name="local_goal_distance" value="$(arg local_goal_distance)" />
+    <param name="lane_half_width" value="$(arg lane_half_width)" />
+    <param name="use_raw_livox_safety" value="$(arg use_raw_livox_safety)" />
+    <param name="use_raw_livox_planning" value="$(arg use_raw_livox_planning)" />
+    <param name="enabled" value="$(arg enabled)" />
+  </node>
+</launch>

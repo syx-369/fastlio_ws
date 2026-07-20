@@ -1,0 +1,46 @@
+<launch>
+  <!-- Component launch: output stays on a raw topic for a future command arbiter. -->
+  <arg name="csv_path" />
+  <arg name="odom_topic" default="/Odometry" />
+  <arg name="cloud_topic" default="/cloud_registered_body" />
+  <arg name="cmd_topic" default="/static_avoid/cmd_vel" />
+  <arg name="world_frame" default="camera_init" />
+  <arg name="target_speed" default="0.22" />
+  <arg name="planning_horizon" default="5.0" />
+  <arg name="enabled" default="false" />
+  <arg name="zone_mode" default="true" />
+  <arg name="use_raw_livox_safety" default="false" />
+  <arg name="raw_livox_topic" default="/livox/lidar" />
+  <arg name="obstacle_memory_time" default="12.0" />
+  <arg name="plan_rate" default="2.0" />
+  <arg name="blocked_retry_rate" default="1.0" />
+  <arg name="safety_slow_distance" default="0.85" />
+  <arg name="safety_stop_distance" default="0.30" />
+  <arg name="safety_clear_hold_time" default="0.80" />
+  <arg name="lane_half_width" default="0.0" />
+
+  <node pkg="static_avoid"
+        type="static_obstacle_avoidance_node.py"
+        name="static_avoid"
+        output="screen">
+    <rosparam command="load" file="$(find static_avoid)/config/static_obstacle.yaml" />
+    <param name="csv_path" value="$(arg csv_path)" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="cloud_topic" value="$(arg cloud_topic)" />
+    <param name="cmd_topic" value="$(arg cmd_topic)" />
+    <param name="world_frame" value="$(arg world_frame)" />
+    <param name="target_speed" value="$(arg target_speed)" />
+    <param name="planning_horizon" value="$(arg planning_horizon)" />
+    <param name="enabled" value="$(arg enabled)" />
+    <param name="zone_mode" value="$(arg zone_mode)" />
+    <param name="use_raw_livox_safety" value="$(arg use_raw_livox_safety)" />
+    <param name="raw_livox_topic" value="$(arg raw_livox_topic)" />
+    <param name="obstacle_memory_time" value="$(arg obstacle_memory_time)" />
+    <param name="plan_rate" value="$(arg plan_rate)" />
+    <param name="blocked_retry_rate" value="$(arg blocked_retry_rate)" />
+    <param name="safety_slow_distance" value="$(arg safety_slow_distance)" />
+    <param name="safety_stop_distance" value="$(arg safety_stop_distance)" />
+    <param name="safety_clear_hold_time" value="$(arg safety_clear_hold_time)" />
+    <param name="lane_half_width" value="$(arg lane_half_width)" />
+  </node>
+</launch>

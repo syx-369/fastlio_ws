@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>hybrid_avoid</name>
+  <version>0.1.0</version>
+  <description>Independent rolling-costmap and A-star avoidance for Bunker Mini.</description>
+
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rospy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
+</package>

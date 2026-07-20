@@ -1,0 +1,22 @@
+<launch>
+  <!-- A full cross-track wall: the expected safe result is BLOCKED and zero velocity. -->
+  <node pkg="hybrid_avoid" type="hybrid_obstacle_simulator.py" name="hybrid_obstacle_simulator" output="screen" clear_params="true">
+    <param name="cmd_topic" value="/smoother_cmd_vel" />
+    <rosparam param="obstacles">
+      - {x: 3.2, y: -3.5, radius: 0.35}
+      - {x: 3.2, y: -2.5, radius: 0.35}
+      - {x: 3.2, y: -1.5, radius: 0.35}
+      - {x: 3.2, y: -0.5, radius: 0.35}
+      - {x: 3.2, y:  0.5, radius: 0.35}
+      - {x: 3.2, y:  1.5, radius: 0.35}
+      - {x: 3.2, y:  2.5, radius: 0.35}
+      - {x: 3.2, y:  3.5, radius: 0.35}
+    </rosparam>
+  </node>
+  <include file="$(find hybrid_avoid)/launch/hybrid_component.launch">
+    <arg name="csv_path" value="$(find hybrid_avoid)/paths/active/hybrid_sim.csv" />
+    <arg name="cmd_topic" value="/smoother_cmd_vel" />
+    <arg name="target_speed" value="0.22" />
+    <arg name="enabled" value="true" />
+  </include>
+</launch>

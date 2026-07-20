@@ -1,0 +1,91 @@
+# Bunker Mini geometry and front-centre MID360 mounting.
+vehicle_length: 0.80
+vehicle_width: 0.70
+lidar_x: 0.40
+lidar_y: 0.0
+lidar_z: 0.50
+odom_pose_is_lidar: true
+
+# Reference route and avoidance-zone semantics.
+reference_smoothing_window: 5
+zone_mode: true
+avoid_start_task: avoid_start
+avoid_end_task: avoid_end
+zone_enter_margin: 0.15
+zone_exit_margin: 0.10
+local_goal_distance: 4.50
+reference_path_step: 0.10
+
+# Rolling local costmap. Obstacles are inflated by the Bunker half-diagonal,
+# so the A-star search can safely plan for a point at the vehicle centre.
+costmap_size_x: 10.0
+costmap_size_y: 10.0
+costmap_resolution: 0.10
+collision_margin: 0.12
+soft_inflation: 0.25
+cost_weight: 2.0
+reference_weight: 0.35
+lane_half_width: 0.0
+lane_boundary_margin: 0.08
+# When lane_half_width is unknown (0), keep the vehicle centre within this
+# generous corridor around the recorded route instead of allowing room-scale
+# 3--4 m detours. This is not a substitute for measuring the legal boundary.
+fallback_center_limit: 1.80
+# If the exact rolling goal is covered by a wall/obstacle, search another free
+# point along the CSV route instead of stopping or moving the goal sideways.
+goal_search_distance: 2.00
+goal_search_step: 0.10
+minimum_goal_distance: 1.20
+
+# Processed S-FAST-LIO body cloud filtering.
+min_obstacle_height: 0.06
+max_obstacle_height: 1.40
+cloud_min_range: 0.12
+cloud_max_range: 8.0
+cloud_forward_min: -1.2
+cloud_forward_max: 8.0
+cloud_lateral_max: 4.0
+self_filter_padding: 0.05
+obstacle_voxel_size: 0.08
+min_points_per_voxel: 2
+max_cloud_points: 50000
+processed_obstacle_memory_time: 2.0
+obstacle_memory_radius: 9.0
+
+# Raw Livox is an independent near-field source. Hardware launch enables both
+# safety and low-speed costmap marking; simulation leaves both disabled.
+use_raw_livox_safety: false
+use_raw_livox_planning: false
+raw_livox_topic: /livox/lidar
+# Allow a short CPU/planning jitter without pulsing SENSOR_STOP.  At the
+# normal 10 Hz MID360 rate this still stops after roughly six missed scans.
+raw_livox_timeout: 0.60
+raw_livox_stride: 2
+raw_livox_max_range: 3.0
+raw_safety_min_points: 3
+raw_obstacle_memory_time: 0.70
+
+# Planning and tracking.
+control_rate: 20.0
+plan_rate: 3.0
+blocked_retry_rate: 2.0
+# Keep a previously accepted path while at least this much of it remains and
+# its complete remainder is still free in the newest costmap.
+path_reuse_min_distance: 1.00
+target_speed: 0.12
+max_linear: 0.30
+max_angular: 0.80
+max_linear_accel: 0.25
+max_angular_accel: 1.20
+lookahead: 0.50
+min_lookahead: 0.35
+max_lookahead: 0.85
+goal_tolerance: 0.20
+safety_slow_distance: 0.90
+safety_stop_distance: 0.35
+safety_lateral_padding: 0.12
+safety_clear_hold_time: 0.80
+cloud_timeout: 1.0
+odom_timeout: 0.60
+require_cloud: true
+enabled: false

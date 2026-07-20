@@ -1,0 +1,119 @@
+# Bunker Mini static-obstacle avoidance configuration.
+
+# Vehicle geometry. base pose is the geometric centre of the 0.8 x 0.7 m body.
+vehicle_length: 0.80
+vehicle_width: 0.70
+lidar_x: 0.40
+lidar_y: 0.0
+lidar_z: 0.50
+odom_pose_is_lidar: true
+
+# Point cloud is expected in the lidar/body frame.
+min_obstacle_height: 0.06
+max_obstacle_height: 1.40
+cloud_min_range: 0.12
+cloud_max_range: 8.0
+cloud_forward_min: -1.2
+cloud_forward_max: 8.0
+cloud_lateral_max: 4.0
+self_filter_padding: 0.05
+obstacle_voxel_size: 0.08
+min_points_per_voxel: 2
+max_obstacle_voxels: 5000
+cloud_stride: 1
+max_cloud_points: 50000
+obstacle_publish_rate: 2.0
+
+# RViz route, waypoint, heading and pose visualization.
+marker_spacing: 0.50
+marker_arrow_length: 0.25
+pose_visualization_rate: 10.0
+
+# S-FAST-LIO currently filters the closest 2 m. Static obstacle memory keeps
+# already observed points while the vehicle passes that blind area. This is a
+# mitigation, not a substitute for a close-range raw point-cloud safety input.
+obstacle_memory_time: 12.0
+obstacle_memory_radius: 9.0
+cloud_timeout: 1.0
+odom_timeout: 0.6
+require_cloud: true
+
+# Independent close-range stop layer from the raw MID360 CustomMsg.  Component
+# mode leaves it off for simulation; the hardware-test launch turns it on.
+use_raw_livox_safety: false
+raw_livox_topic: /livox/lidar
+raw_livox_timeout: 0.40
+raw_livox_stride: 2
+raw_livox_max_range: 3.0
+raw_safety_min_points: 3
+
+# Smooth reference-path detour planner.
+reference_smoothing_window: 5
+zone_mode: true
+avoid_start_task: avoid_start
+avoid_end_task: avoid_end
+zone_enter_margin: 0.15
+zone_exit_margin: 0.10
+# Rolling local-planning window along the recorded reference path.  Five
+# metres is long enough for a full Bunker detour while avoiding an overly
+# conservative plan that groups distant obstacle clusters into one manoeuvre.
+planning_horizon: 5.0
+path_sample_step: 0.10
+collision_margin: 0.16
+obstacle_check_extra: 0.05
+prepare_distance: 1.40
+obstacle_pass_distance: 0.55
+rejoin_distance: 1.80
+min_transition_length: 1.00
+transition_length_per_meter: 1.80
+rejoin_length_per_meter: 1.80
+lateral_offsets: [0.65, 0.85, 1.05, 1.20]
+max_lateral_offset: 1.25
+max_curvature: 2.20
+min_clearance: 0.12
+
+# Set this to the measured legal corridor half-width. Zero disables the limit.
+# Do not leave it disabled at the competition venue if solid lines are present.
+lane_half_width: 0.0
+lane_boundary_margin: 0.08
+
+weight_length: 1.0
+weight_deviation: 0.65
+weight_curvature: 0.35
+weight_curvature_change: 0.15
+weight_clearance: 0.55
+
+# Fallback for staggered/multiple obstacles when no single fixed left/right
+# offset is collision-free.
+enable_multi_obstacle_lattice: true
+lattice_lateral_step: 0.05
+lattice_smoothing_passes: 4
+lattice_weight_deviation: 0.30
+lattice_weight_slope: 1.20
+lattice_weight_acceleration: 10.0
+
+# Bunker tracking and independent safety layer.
+control_rate: 20.0
+plan_rate: 2.0
+blocked_retry_rate: 1.0
+target_speed: 0.22
+max_linear: 0.30
+max_angular: 0.80
+lookahead: 0.50
+min_lookahead: 0.35
+max_lookahead: 0.80
+goal_tolerance: 0.20
+rejoin_lateral_tolerance: 0.15
+rejoin_yaw_tolerance: 0.1745
+safety_slow_distance: 0.85
+safety_stop_distance: 0.30
+safety_lateral_padding: 0.12
+safety_clear_hold_time: 0.80
+dynamic_replan_limit: 2
+dynamic_replan_window: 4.0
+dynamic_wait_clear_hold: 1.0
+rotate_clearance: 0.80
+max_linear_accel: 0.30
+max_angular_accel: 1.20
+
+enabled: false
