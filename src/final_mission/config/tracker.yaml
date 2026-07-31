@@ -1,0 +1,66 @@
+# 统一跟踪器参数。
+#
+# 继承 waypoint_tools/scripts/avoidance_zone_astar_test.py，因此这里同时包含：
+#   1. 父类（分区 A* 避障 + 连续参考线 Pure Pursuit）需要覆盖的默认值；
+#   2. 本包新增的任务点停靠与握手参数。
+#
+# 注意：父类 max_linear 默认 0.35，会截断 target_speed。想跑 0.35 就必须
+# 把 max_linear 抬到 0.35 以上，否则实际速度被 clamp 掉。
+
+# ---------------- 话题 ----------------
+odom_topic: /Odometry
+cmd_topic: /smoother_cmd_vel
+cloud_topic: /cloud_registered
+obstacle_source: cloud
+
+# ---------------- 巡航速度 ----------------
+target_speed: 0.35
+max_linear: 0.50          # 必须 >= target_speed
+max_angular: 1.0
+
+# ---------------- 任务点停靠 ----------------
+# 三个抓取候选点（piper_stop_2/3/4）与三个放置候选点（piper_stop_5/6/7）
+# 相邻间距只有 0.30~0.40m，因此：
+#   approach_switch_dist 必须 > 最大点间距，让候选点之间全程走 P 控制点到点，
+#   避免在 Pure Pursuit 与 P 控制之间反复切换。
+#   task_trigger_margin 必须 > approach_switch_dist，留出从巡航平滑降速的距离。
+task_trigger_margin: 0.80
+approach_switch_dist: 0.45
+approach_k_linear: 0.5
+approach_max_speed: 0.10  # 候选点之间机械臂仍侧伸，限速护臂
+approach_min_speed: 0.04  # 履带静摩擦死区，需实测：发递增速度找轮子起转阈值
+goal_reached_dist: 0.05
+
+# 朝向对齐：机械臂在候选点之间保持 piper_task 的 PICK_SCAN 姿态
+# （piper_task_node.py:32，joint1=-1.530rad=-87.7°，侧伸），大幅自转会让
+# 臂尖横扫，因此设纠正上限。
+# 下面 0.10rad 的依据：假设臂尖伸出 0.6m，转 5.7° 横移约 6cm。
+# 0.6m 是估值、未实测；实测臂尖伸出距离后可重算这个上限。
+task_yaw_tolerance: 0.05        # rad, 约 2.9°
+task_yaw_max_correction: 0.10   # rad, 约 5.7°，超过则跳过对齐直接进任务
+task_yaw_k: 1.2
+task_yaw_min_angular: 0.08      # 角速度死区，需实测
+
+# 超时兜底：到不了就带着误差往下走。视觉在机械臂基座系闭环，
+# 8cm 级误差能被吃掉；在原地磨时间才是纯损失。
+approach_timeout: 15.0
+align_timeout: 8.0
+
+# ---------------- 外部任务握手 ----------------
+task_event_topic: /waypoint_task_event
+task_done_topic: /waypoint_task_done
+skip_topic: /piper_task/navigation_skip
+# 单次 card 约 21s、pick 约 24s，最多 3 次尝试 → 留足重试时间。
+external_task_timeout: 150.0
+unknown_task_policy: skip
+detect_pause_time: 2.0
+
+# ---------------- 终点 ----------------
+# 终点停车由航迹最后一行的 ext:finish 任务点负责：跟踪器照常走
+# APPROACH -> ALIGN_YAW -> TASK，总控收到 start:finish 后发 done 并在
+# finish_done_delay 后禁用跟踪器。
+#
+# 注意：不要在这里加 enable_final_yaw_align / final_yaw_tolerance /
+# finish_stop_time —— 那三个参数只有 follow_waypoints.py 和
+# pure_pursuit_follower.py 读，本跟踪器的父类
+# pure_pursuit_astar_follower.py 不读，写了不生效反而误导。

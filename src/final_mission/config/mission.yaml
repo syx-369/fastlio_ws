@@ -1,0 +1,82 @@
+# 总控与机械臂桥参数。
+
+# ---------------- 起步 ----------------
+wait_for_start: true      # true: 等红旗；false: 直接起步
+auto_start: false
+flag_confirm_frames: 5
+flag_min_area: 3000
+
+# ---------------- 红绿灯 ----------------
+# 机械臂零位（piper_task 的 TRANSPORT_JOINTS）下相机前视，看灯不需要动臂。
+#
+# 本包不定义任何机械臂姿态。所有固定姿态都在
+# piper_task/scripts/piper_task_node.py:32-34，是实物调过的，只有那一份。
+# 若实测零位看不到灯，正确做法是在 final_manager.begin_light_wait 里给
+# /piper_task/command 发一个命令，由 piper_task 用它自己的姿态执行，
+# 不要在这里写关节角。
+green_states: ["green"]
+traffic_timeout: 120.0
+traffic_timeout_policy: pass   # pass: 超时放行（避免卡死）; hold: 停在 ERROR
+traffic_weights: /home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt
+
+# ---------------- 机械臂任务映射（仅备查，代码不读） ----------------
+# 与 piper_task/config/task_config.yaml 的 vehicle_stop_actions 一致。
+# piper_task 自己也订阅 /waypoint_task_event 并直接执行，这里只做失败重试与放行。
+# 实际的停靠点->动作映射在 final_race.launch 的 vehicle_stop_actions 里；
+# 下面这份名单只是给人看的对照表，arm_bridge 用的是代码里的 TASK_KIND。
+arm_task_names:
+  - piper_stop_1
+  - piper_stop_2
+  - piper_stop_3
+  - piper_stop_4
+  - piper_stop_5
+  - piper_stop_6
+  - piper_stop_7
+
+# 每个停靠点的原地重试次数。规则允许每轮最多 3 次装货机会
+# （第 2 次成功 90 分、第 3 次成功 60 分），所以重试 2 次 = 共 3 次尝试。
+retry_counts:
+  card: 2
+  pick: 2
+  place: 2
+
+# 只有这些 reason 才重试。其余是逻辑错误或机械故障，重试无意义。
+retryable_reasons:
+  - reference_not_recognized
+  - object_not_found_at_all_pick_points
+  - target_not_found_at_all_place_points
+  - reference_scan_failed
+  - place_scan_failed
+
+# 重试用尽后是否发 done 放行。
+# true: 本轮取货/卸货 0 分，但保住避障、红绿灯、终点停车分数，且不浪费 150s 超时。
+release_after_retry_exhausted: true
+
+# 机械臂单次动作的等待上限（含关节移动 8s + 视觉 3s + 抓放动作）。
+arm_action_timeout: 60.0
+
+# ---------------- 视觉输入 ----------------
+# arm_topic 模式：订阅 piper_task 发布的图像话题（单相机由机械臂持有）
+# standalone 模式：视觉节点自己开相机（仅用于无机械臂的 dry_run 联调）
+vision_source: arm_topic
+camera_image_topic: /final_mission/camera/color
+
+# 改动 2026-07-30：按需中继。相机永久归 piper_task，不做分时移交
+# （移交要 pipeline.start() 重开设备，1~3s 且可能失败，一旦要不回来
+#  14 个机械臂卡点全废，这个风险换不到任何好处）。
+# 只在 flag/light 模式下请求发帧，idle 立即停。占空比约 3%。
+relay_request_topic: /final_mission/camera/request
+relay_keepalive_period: 1.0     # 请求心跳周期（piper_task 侧超时 3s 自动停发）
+
+# 显示识别画面。没有 DISPLAY（未接显示器 / ssh 未开 X11）时会自动降级为
+# 不显示并告警，识别逻辑不受影响，不会崩。
+show_image: true
+
+# 等红旗超过这个秒数还没收到任何图像，就大声报错并提示手动起步。
+# 只告警不阻止起步 —— 「图像没通」和「没看到红旗」现象一样都是车不动，
+# 赛场上必须能一眼区分。
+image_warn_after: 10.0
+
+# ---------------- 终点 ----------------
+finish_task_name: finish
+finish_done_delay: 3.0

@@ -1,0 +1,83 @@
+<launch>
+  <!-- 决赛总控唯一入口。
+
+       启动前必须已经在跑（各自独立终端）：
+         1. 底盘   roslaunch bunker_bringup bunker_robot_base.launch
+         2. 雷达   roslaunch livox_ros_driver2 msg_MID360.launch
+         3. 定位   roslaunch sfast_lio mapping_mid360_relocalization.launch
+         4. 机械臂 roslaunch piper start_single_piper.launch can_port:=can1 auto_enable:=true
+         5. 逆解   python piper_pinocchio.py
+         6. 臂任务 roslaunch piper_task piper_task.launch enable_camera_relay:=true
+
+       第 6 步的 enable_camera_relay:=true 必须加 —— 全车只有一台 D435i 且被
+       piper_task 独占，不打开中继，红旗和红绿灯识别拿不到任何图像。
+       忘了加也不会崩：总控等红旗 10s 后会报错并提示改用手动起步。
+
+       注意：不要用 piper_task 的 arm_function_test.launch —— 它自带的
+       follower 会把 avoid_start/avoid_end 抹成 none，避障会失效。
+
+       重要前提：重定位没有初始位姿配准（laserMapping_re.cpp 直接加载
+       PCD/GlobalMap_ikdtree.pcd，mid360.yaml 里 init_pos 全 0），
+       车必须物理停在建图起点原点位姿上开机，否则整条航迹全程偏移。
+  -->
+
+  <arg name="csv_path"/>
+  <arg name="target_speed" default="0.35"/>
+  <arg name="cmd_topic" default="/smoother_cmd_vel"/>
+  <arg name="wait_for_start" default="true"/>
+  <arg name="auto_start" default="false"/>
+  <arg name="enable_vision" default="true"/>
+  <arg name="show_image" default="true"/>
+  <arg name="vision_source" default="arm_topic"/>
+  <arg name="rounds" default="2"/>
+
+  <!-- ============ 统一跟踪器（唯一速度权） ============ -->
+  <node pkg="final_mission" type="final_tracker.py" name="final_tracker"
+        output="screen" required="true">
+    <rosparam command="load" file="$(find final_mission)/config/tracker.yaml"/>
+    <param name="csv_path" value="$(arg csv_path)"/>
+    <param name="target_speed" value="$(arg target_speed)"/>
+    <param name="cmd_topic" value="$(arg cmd_topic)"/>
+    <!-- 上电不动，等总控在红旗确认后放行 -->
+    <param name="enabled" value="false"/>
+    <param name="enable_topic" value="/final_mission/tracker_enable"/>
+  </node>
+
+  <!-- ============ 总控（起步闸门 + 红绿灯） ============ -->
+  <node pkg="final_mission" type="final_manager.py" name="final_manager"
+        output="screen" required="true">
+    <rosparam command="load" file="$(find final_mission)/config/mission.yaml"/>
+    <param name="cmd_topic" value="$(arg cmd_topic)"/>
+    <param name="wait_for_start" value="$(arg wait_for_start)"/>
+    <param name="auto_start" value="$(arg auto_start)"/>
+  </node>
+
+  <!-- ============ 机械臂桥（原地重试 + 失败放行） ============ -->
+  <node pkg="final_mission" type="arm_bridge.py" name="arm_bridge"
+        output="screen">
+    <rosparam command="load" file="$(find final_mission)/config/mission.yaml"/>
+    <!-- 与 piper_task/config/task_config.yaml 保持一致 -->
+    <rosparam param="vehicle_stop_actions">
+      piper_stop_1: card
+      piper_stop_2: pick1
+      piper_stop_3: pick2
+      piper_stop_4: pick3
+      piper_stop_5: place1
+      piper_stop_6: place2
+      piper_stop_7: place3
+    </rosparam>
+  </node>
+
+  <!-- ============ 视觉（红旗 + 红绿灯） ============ -->
+  <!-- 改动 2026-07-30：按需中继。相机永久归 piper_task，本节点只在要识别时
+       通过 /final_mission/camera/request 请求发帧，识别完立即停。
+       前提：piper_task 必须用 enable_camera_relay:=true 启动。 -->
+  <node if="$(arg enable_vision)"
+        pkg="final_mission" type="final_vision.py" name="final_vision"
+        output="screen">
+    <rosparam command="load" file="$(find final_mission)/config/mission.yaml"/>
+    <param name="vision_source" value="$(arg vision_source)"/>
+    <param name="show_image" value="$(arg show_image)"/>
+    <param name="initial_mode" value="flag"/>
+  </node>
+</launch>

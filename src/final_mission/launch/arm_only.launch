@@ -1,0 +1,40 @@
+<launch>
+  <!-- 机械臂七点位联调：车按航迹跑并在七点停靠，机械臂真实执行，
+       但不等红旗、不识别红绿灯。
+
+       等价于原来的 piper_task/arm_function_test.launch，区别是：
+         1. 跟踪器换成 final_tracker（Pure Pursuit + 弧长进度 + 三段式停靠），
+            不再是 arm_function_test_follower 的逐点 P 控制；
+         2. CSV 里的 avoid_start/avoid_end 仍然生效（原 follower 会把它们抹掉）；
+         3. 带原地重试和失败放行（arm_bridge）。
+
+       启动前需已运行 piper_task.launch（不是 arm_function_test.launch）。
+  -->
+
+  <arg name="csv_path"/>
+  <arg name="target_speed" default="0.20"/>
+  <arg name="cmd_topic" default="/smoother_cmd_vel"/>
+
+  <node pkg="final_mission" type="final_tracker.py" name="final_tracker"
+        output="screen" required="true">
+    <rosparam command="load" file="$(find final_mission)/config/tracker.yaml"/>
+    <param name="csv_path" value="$(arg csv_path)"/>
+    <param name="target_speed" value="$(arg target_speed)"/>
+    <param name="cmd_topic" value="$(arg cmd_topic)"/>
+    <param name="enabled" value="true"/>
+  </node>
+
+  <node pkg="final_mission" type="arm_bridge.py" name="arm_bridge"
+        output="screen">
+    <rosparam command="load" file="$(find final_mission)/config/mission.yaml"/>
+    <rosparam param="vehicle_stop_actions">
+      piper_stop_1: card
+      piper_stop_2: pick1
+      piper_stop_3: pick2
+      piper_stop_4: pick3
+      piper_stop_5: place1
+      piper_stop_6: place2
+      piper_stop_7: place3
+    </rosparam>
+  </node>
+</launch>

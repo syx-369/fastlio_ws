@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>final_mission</name>
+  <version>0.0.1</version>
+  <description>决赛总控：统一跟踪器（分区A*避障 + 任务点精确停靠 + 外部任务握手）、
+  起步红旗与红绿灯视觉、机械臂任务重试与放行、赛前航迹校验。</description>
+
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf</depend>
+
+  <!-- 跟踪器继承 waypoint_tools/scripts 下的 avoidance_zone_astar_test.py -->
+  <exec_depend>waypoint_tools</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+</package>

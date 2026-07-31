@@ -1,0 +1,29 @@
+<launch>
+  <!-- 路线联调：只跑跟踪 + 避障，不启动机械臂、不等红旗。
+
+       用途：新录完航迹后先验证路线本身（避障区能不能绕、任务点能不能停准）。
+       任务点的 ext: 握手没有机械臂响应，会靠 external_task_timeout 超时放行，
+       所以这里把超时压到很短，让车在每个任务点只停一下就继续。
+
+       每个任务点会打出实际停靠误差，这是误差数据的主要来源：
+         [TASK] ext:piper_stop_2 @seq11: 位置误差 0.043m (dx=+0.031 dy=-0.030),
+                朝向误差 0.021rad(1.2°), 逼近耗时 2.4s
+  -->
+
+  <arg name="csv_path"/>
+  <arg name="target_speed" default="0.25"/>
+  <arg name="cmd_topic" default="/smoother_cmd_vel"/>
+  <arg name="task_pause" default="3.0"/>
+
+  <node pkg="final_mission" type="final_tracker.py" name="final_tracker"
+        output="screen" required="true">
+    <rosparam command="load" file="$(find final_mission)/config/tracker.yaml"/>
+    <param name="csv_path" value="$(arg csv_path)"/>
+    <param name="target_speed" value="$(arg target_speed)"/>
+    <param name="cmd_topic" value="$(arg cmd_topic)"/>
+    <!-- 没有总控压闸，直接使能 -->
+    <param name="enabled" value="true"/>
+    <!-- 无机械臂响应，靠短超时放行 -->
+    <param name="external_task_timeout" value="$(arg task_pause)"/>
+  </node>
+</launch>
