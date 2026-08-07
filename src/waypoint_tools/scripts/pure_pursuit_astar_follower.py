@@ -1019,6 +1019,9 @@ class PurePursuitAStarFollower:
             return
 
         self.advance_global_waypoint_if_needed()
+        if bool(getattr(self, "progress_fault", False)):
+            self.stop_robot()
+            return
         if self.global_index >= len(self.global_waypoints):
             rospy.loginfo("All CSV waypoints reached. Finish.")
             self.state = "FINISH"

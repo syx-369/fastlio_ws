@@ -27,6 +27,7 @@ from pure_pursuit_astar_follower import (
     Waypoint,
     clamp,
     parse_bool,
+    wrap_to_pi,
 )
 
 
@@ -71,7 +72,28 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             1, int(rospy.get_param("~progress_search_back", 10))
         )
         self.progress_search_ahead = max(
-            10, int(rospy.get_param("~progress_search_ahead", 80))
+            10, int(rospy.get_param("~progress_search_ahead", 12))
+        )
+        self.progress_zone_search_ahead = max(
+            self.progress_search_ahead,
+            int(rospy.get_param("~progress_zone_search_ahead", 20)),
+        )
+        self.progress_max_advance = max(
+            0.20, float(rospy.get_param("~progress_max_advance", 1.00))
+        )
+        self.progress_zone_max_advance = max(
+            self.progress_max_advance,
+            float(rospy.get_param("~progress_zone_max_advance", 3.60)),
+        )
+        self.progress_zone_confirm_samples = max(
+            2, int(rospy.get_param("~progress_zone_confirm_samples", 3))
+        )
+        self.progress_zone_confirm_tolerance = max(
+            0.05,
+            float(rospy.get_param("~progress_zone_confirm_tolerance", 0.30)),
+        )
+        self.progress_heading_tolerance = max(
+            0.10, float(rospy.get_param("~progress_heading_tolerance", 0.70))
         )
         self.progress_lateral_limit = max(
             0.5, float(rospy.get_param("~progress_lateral_limit", 3.0))
@@ -97,6 +119,10 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             float(rospy.get_param("~zone_handoff_lateral_tolerance", 0.30)),
         )
         self.last_route_lateral = float("inf")
+        self.progress_fault = False
+        self.zone_progress_candidate_s = None
+        self.zone_progress_candidate_segment = None
+        self.zone_progress_candidate_count = 0
 
         self.planner_requested = self.planner_enabled
         if not self.planner_requested:
@@ -174,8 +200,18 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             self.max_angular_accel,
         )
         rospy.loginfo(
-            "Route progress: length=%.2fm lateral_limit=%.2fm pass_margin=%.2fm",
+            "Route progress: length=%.2fm search=%d/%d zone_ahead=%d max_advance=%.2fm "
+            "zone_max=%.2fm zone_confirm=%d@%.2fm heading=%.2frad "
+            "lateral_limit=%.2fm pass_margin=%.2fm",
             self.route_cumulative_s[-1],
+            self.progress_search_back,
+            self.progress_search_ahead,
+            self.progress_zone_search_ahead,
+            self.progress_max_advance,
+            self.progress_zone_max_advance,
+            self.progress_zone_confirm_samples,
+            self.progress_zone_confirm_tolerance,
+            self.progress_heading_tolerance,
             self.progress_lateral_limit,
             self.progress_pass_margin,
         )
@@ -320,6 +356,7 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         self.blocked_since = None
         self.detour_side_lock = 0
         self.detour_lock_until = rospy.Time(0)
+        self.clear_zone_progress_candidate()
 
         if self.zone_state_pub is not None:
             self.zone_state_pub.publish(Bool(data=active))
@@ -505,6 +542,14 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             return True
         return math.hypot(end_x - self.current_x, end_y - self.current_y) <= self.local_goal_tolerance
 
+    def progress_projection_end_segment(self):
+        """返回本轮允许用于进度投影的最后一个折线段。
+
+        普通路径允许看到文件末尾；任务跟踪器会覆盖此方法，把搜索硬限制在
+        下一个未完成任务点之前，防止重复航迹把进度吸到下一圈。
+        """
+        return len(self.global_waypoints) - 2
+
     def project_pose_to_route(self):
         """在当前进度附近把车辆投影到 CSV 折线，返回弧长和横向距离。"""
         if len(self.global_waypoints) < 2:
@@ -512,10 +557,18 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
 
         center = min(self.global_index, len(self.global_waypoints) - 1)
         begin = max(0, center - self.progress_search_back - 1)
+        search_ahead = (
+            self.progress_zone_search_ahead
+            if self.zone_active
+            else self.progress_search_ahead
+        )
         end = min(
             len(self.global_waypoints) - 2,
-            center + self.progress_search_ahead,
+            center + search_ahead,
+            self.progress_projection_end_segment(),
         )
+        if end < begin:
+            return self.route_progress_s, float("inf"), center
         best = None
         for segment_index in range(begin, end + 1):
             first = self.global_waypoints[segment_index]
@@ -541,6 +594,14 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             projected_s = self.route_cumulative_s[segment_index] + ratio * segment_length
             # 不让一个路线交叉点把进度匹配到已经走过很远的后方。
             if projected_s < self.route_progress_s - 0.50:
+                continue
+            # 用录制航向插值，而不是折线切向。任务点附近常有几毫米的停顿
+            # 小段，其几何切向会被定位噪声放大，但录制航向仍然可靠。
+            route_yaw = wrap_to_pi(
+                first.yaw + ratio * wrap_to_pi(second.yaw - first.yaw)
+            )
+            heading_error = abs(wrap_to_pi(route_yaw - self.current_yaw))
+            if heading_error > self.progress_heading_tolerance:
                 continue
             candidate = (lateral, projected_s, segment_index)
             if best is None or candidate < best:
@@ -580,13 +641,66 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         )
         return self.global_waypoints[target_index]
 
+    def clear_zone_progress_candidate(self):
+        """清除避障区路线重投影的连续确认状态。"""
+        self.zone_progress_candidate_s = None
+        self.zone_progress_candidate_segment = None
+        self.zone_progress_candidate_count = 0
+
+    def confirm_zone_progress_rejoin(self, projected_s, segment_index):
+        """连续确认 A* 绕行后重新落回 CSV 的中等进度跳变。
+
+        A* 会让车辆暂时偏离原始 CSV，路线投影可能先停滞、再一次落到前方
+        1m 以上的位置。这类跳变只在避障区内放宽，并要求多帧候选进度相互
+        一致；区外仍使用严格的单帧防跳锁止。
+        """
+        consistent = (
+            self.zone_progress_candidate_s is not None
+            and abs(projected_s - self.zone_progress_candidate_s)
+            <= self.progress_zone_confirm_tolerance
+        )
+        if consistent:
+            self.zone_progress_candidate_count += 1
+        else:
+            self.zone_progress_candidate_count = 1
+
+        self.zone_progress_candidate_s = projected_s
+        self.zone_progress_candidate_segment = segment_index
+        confirmed = (
+            self.zone_progress_candidate_count >= self.progress_zone_confirm_samples
+        )
+        if confirmed:
+            rospy.logwarn(
+                "Avoidance-zone route rejoin accepted after %d consistent samples: "
+                "%.2fm -> %.2fm (advance %.2fm, segment=%d).",
+                self.zone_progress_candidate_count,
+                self.route_progress_s,
+                projected_s,
+                projected_s - self.route_progress_s,
+                segment_index,
+            )
+            self.clear_zone_progress_candidate()
+            return True
+
+        rospy.logwarn_throttle(
+            1.0,
+            "Avoidance-zone route rejoin pending: %.2fm -> %.2fm "
+            "(advance %.2fm, sample %d/%d, segment=%d).",
+            self.route_progress_s,
+            projected_s,
+            projected_s - self.route_progress_s,
+            self.zone_progress_candidate_count,
+            self.progress_zone_confirm_samples,
+            segment_index,
+        )
+        return False
+
     def advance_global_waypoint_if_needed(self):
         old_index = self.global_index
         projected_s, lateral, segment_index = self.project_pose_to_route()
         self.last_route_lateral = lateral
-        if lateral <= self.progress_lateral_limit:
-            self.route_progress_s = max(self.route_progress_s, projected_s)
-        else:
+        if lateral > self.progress_lateral_limit:
+            self.clear_zone_progress_candidate()
             rospy.logwarn_throttle(
                 1.0,
                 "Route projection is %.2fm away (limit %.2fm); keep monotonic progress %.2fm.",
@@ -594,6 +708,41 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
                 self.progress_lateral_limit,
                 self.route_progress_s,
             )
+            return
+
+        progress_advance = projected_s - self.route_progress_s
+        if progress_advance > self.progress_max_advance:
+            if (
+                self.zone_active
+                and progress_advance <= self.progress_zone_max_advance
+            ):
+                if not self.confirm_zone_progress_rejoin(projected_s, segment_index):
+                    return
+            else:
+                self.clear_zone_progress_candidate()
+                active_limit = (
+                    self.progress_zone_max_advance
+                    if self.zone_active
+                    else self.progress_max_advance
+                )
+                self.progress_fault = True
+                rospy.logfatal(
+                    "Route progress jump rejected: %.2fm -> %.2fm (advance %.2fm, "
+                    "limit %.2fm, avoidance_zone=%s, segment=%d). Robot is latched "
+                    "stopped; restart after checking route/localization.",
+                    self.route_progress_s,
+                    projected_s,
+                    progress_advance,
+                    active_limit,
+                    self.zone_active,
+                    segment_index,
+                )
+                self.stop_robot()
+                return
+        else:
+            self.clear_zone_progress_candidate()
+
+        self.route_progress_s = max(self.route_progress_s, projected_s)
 
         passed_s = self.route_progress_s + self.progress_pass_margin
         self.global_index = min(
@@ -661,6 +810,13 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             self.force_stop_cmd = False
 
     def control_step(self):
+        if self.progress_fault:
+            rospy.logerr_throttle(
+                1.0,
+                "Route progress fault is latched; publish zero speed until node restart.",
+            )
+            self.stop_robot()
+            return
         if self.localization_fault:
             rospy.logerr_throttle(
                 1.0,

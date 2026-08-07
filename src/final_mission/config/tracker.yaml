@@ -18,6 +18,25 @@ target_speed: 0.35
 max_linear: 0.50          # 必须 >= target_speed
 max_angular: 1.0
 
+# ---------------- 重复航迹进度防跳 ----------------
+# 这里只限制“车辆当前属于哪一段 CSV”的匹配窗口，不改变 A* 的 4m 参考线、
+# 1.2/2.0/3.0m 前向采样或点云避障距离。indoor.csv 平均点距约 0.16m，
+# 12 个点约 1.9m；原来的 80 个点会跨过整圈并误匹配到第二轮/出场段。
+progress_search_ahead: 12
+progress_search_back: 10
+progress_max_advance: 1.00
+progress_heading_tolerance: 0.70
+
+# A* 绕行时车辆会暂时离开原始 CSV，重新靠回路线的一刻可能产生 1m 以上
+# 的合理进度跳变。只在 avoid_start..avoid_end（含出口交接走廊）内允许：
+# 避障区独立向前搜索 20 段，indoor.csv 实算最大约 3.445m，因此留到 3.60m。
+# 1.00~3.60m 的候选必须连续 3 帧一致才接受；超过 3.60m 仍永久锁停。
+# 区外仍严格使用上面的 1.00m，不会削弱重复航迹/跨圈防跳保护。
+progress_zone_search_ahead: 20
+progress_zone_max_advance: 3.60
+progress_zone_confirm_samples: 3
+progress_zone_confirm_tolerance: 0.30
+
 # ---------------- 任务点停靠 ----------------
 # 三个抓取候选点（piper_stop_2/3/4）与三个放置候选点（piper_stop_5/6/7）
 # 相邻间距只有 0.30~0.40m，因此：
@@ -25,7 +44,7 @@ max_angular: 1.0
 #   避免在 Pure Pursuit 与 P 控制之间反复切换。
 #   task_trigger_margin 必须 > approach_switch_dist，留出从巡航平滑降速的距离。
 task_trigger_margin: 0.80
-approach_switch_dist: 0.45
+approach_switch_dist: 0.55
 approach_k_linear: 0.5
 approach_max_speed: 0.10  # 候选点之间机械臂仍侧伸，限速护臂
 approach_min_speed: 0.04  # 履带静摩擦死区，需实测：发递增速度找轮子起转阈值
@@ -54,6 +73,33 @@ skip_topic: /piper_task/navigation_skip
 external_task_timeout: 150.0
 unknown_task_policy: skip
 detect_pause_time: 2.0
+
+# ---------------- 仅抓取全点失败时允许的倒车恢复 ----------------
+# 正常巡航链仍会把所有负线速度压成 0。只有 final_tracker 亲自收到
+# failed:pick3:object_not_found_at_all_pick_points 后，以下专用控制器才会开放
+# 当前一段负速度；其他失败、其他任务点或人工误发 reverse 都会被拒绝。
+backtrack_command_topic: /final_mission/backtrack_command
+backtrack_event_topic: /final_mission/backtrack_event
+arm_result_topic: /piper_task/result
+
+reverse_k_linear: 0.35
+reverse_min_speed: 0.035
+reverse_max_speed: 0.06
+reverse_accel: 0.08
+reverse_max_angular: 0.12
+reverse_yaw_k: 0.8
+reverse_max_yaw_error: 0.10
+reverse_goal_dist: 0.04
+reverse_cross_track_max: 0.10
+reverse_timeout: 12.0
+# 防止航迹任务标错后向后长距离行驶；实录点间距预计只有 0.30~0.40m。
+reverse_max_segment_dist: 0.80
+
+# 车尾保险杠后方净空小于此值立即终止倒车。倒车时必须有新鲜点云，
+# 没有点云或点云超时会直接放弃本轮取货，绝不盲倒。
+reverse_rear_stop_dist: 0.20
+reverse_safety_half_width: 0.40
+reverse_require_obstacles: true
 
 # ---------------- 终点 ----------------
 # 终点停车由航迹最后一行的 ext:finish 任务点负责：跟踪器照常走

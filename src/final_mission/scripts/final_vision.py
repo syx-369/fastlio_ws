@@ -51,6 +51,15 @@ class FinalVision:
         self.image_topic = rospy.get_param(
             "~camera_image_topic", "/final_mission/camera/color"
         )
+        self.arm_detection_image_topic = rospy.get_param(
+            "~arm_detection_image_topic", "/piper_task/detection_image"
+        )
+        self.arm_detection_status_topic = rospy.get_param(
+            "~arm_detection_status_topic", "/piper_task/detection_status"
+        )
+        self.arm_detection_hold_time = max(
+            1.0, float(rospy.get_param("~arm_detection_hold_time", 12.0))
+        )
         self.weights = rospy.get_param(
             "~traffic_weights",
             "/home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt",
@@ -72,6 +81,9 @@ class FinalVision:
         self.names = {}
         self.pipeline = None
         self.latest_frame = None
+        self.latest_arm_detection_frame = None
+        self.last_arm_detection_at = None
+        self.latest_arm_detection_status = ""
 
         # ===== 改动 2026-07-30：按需中继 =====
         # 相机永久归 piper_task（设备独占，交出去要不回来的风险太大），
@@ -132,6 +144,18 @@ class FinalVision:
             rospy.Subscriber(
                 self.image_topic, Image, self.image_callback, queue_size=1
             )
+            rospy.Subscriber(
+                self.arm_detection_image_topic,
+                Image,
+                self.arm_detection_image_callback,
+                queue_size=1,
+            )
+            rospy.Subscriber(
+                self.arm_detection_status_topic,
+                String,
+                self.arm_detection_status_callback,
+                queue_size=20,
+            )
 
         rospy.on_shutdown(self.on_shutdown)
 
@@ -140,6 +164,8 @@ class FinalVision:
         rospy.loginfo("图像来源       : %s", self.source)
         if self.source == "arm_topic":
             rospy.loginfo("订阅图像话题   : %s", self.image_topic)
+            rospy.loginfo("机械臂检测图像 : %s", self.arm_detection_image_topic)
+            rospy.loginfo("机械臂检测状态 : %s", self.arm_detection_status_topic)
         rospy.loginfo("初始模式       : %s", self.mode)
         rospy.loginfo("红绿灯权重     : %s", self.weights)
         rospy.loginfo("=" * 60)
@@ -147,25 +173,46 @@ class FinalVision:
     # ------------------------------------------------------------------
     # 图像来源
     # ------------------------------------------------------------------
-    def image_callback(self, msg):
+    @staticmethod
+    def decode_image(msg):
         """手工解码 sensor_msgs/Image，避免依赖 cv_bridge 的 ABI 兼容问题。"""
         if msg.encoding not in ("bgr8", "rgb8"):
             rospy.logwarn_throttle(
                 5.0, "不支持的图像编码 %s，仅支持 bgr8/rgb8。", msg.encoding
             )
-            return
+            return None
         frame = np.frombuffer(msg.data, dtype=np.uint8)
         try:
             frame = frame.reshape(msg.height, msg.width, 3)
         except ValueError:
             rospy.logwarn_throttle(5.0, "图像尺寸与数据长度不匹配，丢弃该帧。")
-            return
+            return None
         if msg.encoding == "rgb8":
             frame = frame[:, :, ::-1]
-        self.latest_frame = frame.copy()
+        return frame.copy()
+
+    def image_callback(self, msg):
+        frame = self.decode_image(msg)
+        if frame is None:
+            return
+        self.latest_frame = frame
         # 改动 2026-07-30：记帧用于通路确认（见 publish_status）
         self.frames_seen += 1
         self.last_frame_at = rospy.Time.now()
+
+    def arm_detection_image_callback(self, msg):
+        frame = self.decode_image(msg)
+        if frame is None:
+            return
+        self.latest_arm_detection_frame = frame
+        self.last_arm_detection_at = rospy.Time.now()
+
+    def arm_detection_status_callback(self, msg):
+        status = (msg.data or "").strip()
+        if not status:
+            return
+        self.latest_arm_detection_status = status
+        rospy.loginfo("[机械臂视觉] %s", status)
 
     # ===== 改动 2026-07-30 新增：按需中继控制 =====
     def request_relay(self, want):
@@ -471,6 +518,25 @@ class FinalVision:
                 last_status_at = now
 
             if self.mode == "idle":
+                if self.display_ok:
+                    fresh_debug = (
+                        self.latest_arm_detection_frame is not None
+                        and self.last_arm_detection_at is not None
+                        and (now - self.last_arm_detection_at).to_sec()
+                        <= self.arm_detection_hold_time
+                    )
+                    try:
+                        if fresh_debug:
+                            cv2.imshow(
+                                "Final Mission Vision",
+                                self.latest_arm_detection_frame,
+                            )
+                        # 即使暂时没有新图，也持续处理 GUI 事件，避免卡片识别
+                        # 成功后窗口因为 waitKey 停止调用而变成“未响应”。
+                        cv2.waitKey(1)
+                    except cv2.error as exc:
+                        rospy.logwarn("机械臂检测图像显示失败：%s", exc)
+                        self.display_ok = False
                 rate.sleep()
                 continue
 
