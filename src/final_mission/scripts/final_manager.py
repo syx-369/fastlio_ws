@@ -6,7 +6,7 @@
 不碰机械臂动作：
 
   起步       等红旗（或手动/自动起步），起步前压住跟踪器
-  红绿灯     ext:traffic_light 到点后切视觉到 light 模式，等绿灯再放行
+  红绿灯     ext:traffic_light 到点后切视觉到 light 模式，仅红灯停车
   终点       ext:finish 到点后标记完成
 
 不做的事：
@@ -41,7 +41,10 @@ class FinalManager:
         self.traffic_light_tasks = self.param_list(
             "~traffic_light_tasks", ["traffic_light"]
         )
-        self.green_states = self.param_list("~green_states", ["green"])
+        self.red_states = self.param_list("~red_states", ["red"])
+        self.non_red_confirm_frames = max(
+            1, int(rospy.get_param("~non_red_confirm_frames", 3))
+        )
         self.traffic_timeout = float(rospy.get_param("~traffic_timeout", 120.0))
         self.traffic_timeout_policy = str(
             rospy.get_param("~traffic_timeout_policy", "pass")
@@ -63,6 +66,9 @@ class FinalManager:
         self.state = "BOOT"
         self.start_received = self.auto_start
         self.traffic_light_state = "none"
+        self.traffic_light_sample_seq = 0
+        self.last_evaluated_light_seq = 0
+        self.non_red_confirm_count = 0
         self.pending_light_task = None
         self.light_wait_started = None
         self.finish_seen_at = None
@@ -145,6 +151,7 @@ class FinalManager:
 
     def light_callback(self, msg):
         self.traffic_light_state = (msg.data or "").strip().lower()
+        self.traffic_light_sample_seq += 1
 
     # 改动 2026-07-30 新增
     def vision_status_callback(self, msg):
@@ -222,21 +229,25 @@ class FinalManager:
     # ------------------------------------------------------------------
     def begin_light_wait(self, task):
         # 机械臂零位（TRANSPORT_JOINTS 全 0）下相机前视，看灯无需动臂。
-        if self.traffic_light_state in self.green_states:
-            rospy.loginfo("红绿灯已是绿灯，直接放行。")
-            self.release_light(task, "already_green")
-            return
         self.pending_light_task = task
         self.light_wait_started = rospy.Time.now()
+        # 只使用切换到 light 模式之后收到的新识别结果，避免初始/旧的 none
+        # 被误当成“未检测到红灯”而在相机尚未出图时直接放行。
+        self.last_evaluated_light_seq = self.traffic_light_sample_seq
+        self.non_red_confirm_count = 0
         self.vision_control_pub.publish(String(data="light"))
         self.set_state("WAIT_LIGHT")
-        rospy.loginfo("等待绿灯，当前状态：%s", self.traffic_light_state)
+        rospy.loginfo(
+            "红绿灯判定：仅红灯停车，连续 %d 帧非红灯后放行。",
+            self.non_red_confirm_frames,
+        )
 
     def release_light(self, task, reason):
         self.done_pub.publish(String(data="done:%s" % task))
         self.vision_control_pub.publish(String(data="idle"))
         self.pending_light_task = None
         self.light_wait_started = None
+        self.non_red_confirm_count = 0
         rospy.loginfo("红绿灯放行（%s）。", reason)
         if self.state == "WAIT_LIGHT":
             self.set_state("RUN")
@@ -255,9 +266,27 @@ class FinalManager:
                     self.set_state("RUN")
 
             elif self.state == "WAIT_LIGHT":
-                if self.traffic_light_state in self.green_states:
-                    self.release_light(self.pending_light_task, "green")
-                elif (
+                # 每个视觉消息只计算一次，不能让 10Hz 总控循环重复累计同一帧。
+                if self.traffic_light_sample_seq != self.last_evaluated_light_seq:
+                    self.last_evaluated_light_seq = self.traffic_light_sample_seq
+                    if self.traffic_light_state in self.red_states:
+                        self.non_red_confirm_count = 0
+                        rospy.loginfo_throttle(1.0, "检测到红灯，继续停车。")
+                    else:
+                        self.non_red_confirm_count += 1
+                        rospy.loginfo(
+                            "未检测到红灯：state=%s，确认 %d/%d。",
+                            self.traffic_light_state,
+                            self.non_red_confirm_count,
+                            self.non_red_confirm_frames,
+                        )
+                        if self.non_red_confirm_count >= self.non_red_confirm_frames:
+                            self.release_light(
+                                self.pending_light_task,
+                                "non_red:%s" % self.traffic_light_state,
+                            )
+
+                if self.state == "WAIT_LIGHT" and (
                     self.traffic_timeout > 0.0
                     and self.light_wait_started is not None
                 ):

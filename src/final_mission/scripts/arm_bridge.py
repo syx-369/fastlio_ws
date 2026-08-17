@@ -7,15 +7,19 @@ piper_task 自己订阅 /waypoint_task_event，车一停就直接执行 card/pic
 
 1. 普通动作原地重试。card/place 的可恢复视觉失败仍按配置在原地重试。
 
-2. 取货回退恢复。三个候选点都没有找到目标时，不在第三点原地重复：
-   先收臂，再请求 final_tracker 依次倒回第二、第一候选点重新观察。
-   每一段倒车都必须先收到 stow 成功，跟踪器也只在亲自收到指定的 pick3
-   失败结果后才接受负速度。
+2. 取货回退恢复。第三点仍没有安全抓取位姿时，不在第三点原地重复：
+   若正确目标位于画面边缘，保持抓取观察位并短倒约 0.14m 复查；仍失败再
+   依次倒回第二、第一候选点。完全没有检测到目标时直接倒回前两个候选点。
+   每一段倒车都先确认机械臂保持抓取观察位；跟踪器也只在亲自收到指定的
+   pick3 失败结果后才接受负速度。
 
 3. 失败放行。piper_task 只在 ok=True 时发 done，
    失败路径不发，车会一直卡到跟踪器的 external_task_timeout 才走。
    普通动作重试用尽后代发 done；取货回退也失败则执行 abort_round，
    收臂并标记 no_payload，再让车辆继续经过卸货区。
+
+4. 放置失败收尾。三个放置候选点均未找到目标时，不让车辆带着侧伸机械臂
+   和物品继续行驶；命令 piper_task 原地张爪丢弃，再确认回运输零位后放行。
 
 关键前提（已核实）：piper_task 的 command_callback 入队时 waypoint_task_name
 为 None（piper_task_node.py:178），因此经 /piper_task/command 重发的命令
@@ -43,8 +47,18 @@ TASK_KIND = {
 }
 
 BACKTRACK_PICK3_FAILURE = "object_not_found_at_all_pick_points"
+BACKTRACK_PICK3_EDGE_FAILURE = "target_at_edge_at_final_pick_point"
+BACKTRACK_RECOVERY_MID = "piper_recovery_mid"
 BACKTRACK_TARGETS = ("piper_stop_3", "piper_stop_2")
+BACKTRACK_EDGE_TARGETS = (
+    BACKTRACK_RECOVERY_MID,
+    "piper_stop_3",
+    "piper_stop_2",
+)
 BACKTRACK_PICK_COMMANDS = {
+    # 恢复中间点位于 pick2 与 pick3 之间，用 pick2 命令复查；未找到时
+    # 它会返回可继续恢复的 success:not_here_continue_to_pick3。
+    BACKTRACK_RECOVERY_MID: "pick2",
     "piper_stop_3": "pick2",
     "piper_stop_2": "pick1",
 }
@@ -85,6 +99,9 @@ class ArmBridge:
         )
         self.action_timeout = float(rospy.get_param("~arm_action_timeout", 60.0))
         self.resend_delay = float(rospy.get_param("~resend_delay", 1.0))
+        self.place_discard_max_attempts = max(
+            1, int(rospy.get_param("~place_discard_max_attempts", 3))
+        )
 
         # 当前正在盯的停靠点
         self.active_task = None      # piper_stop_N
@@ -100,7 +117,13 @@ class ArmBridge:
         self.recovery_active = False
         self.recovery_state = None
         self.recovery_target_cursor = 0
+        self.recovery_targets = ()
         self.expected_recovery_command = None
+
+        # 第三个放置点仍未找到目标后的“丢弃并收臂”安全收尾。
+        self.place_discard_active = False
+        self.place_discard_attempts = 0
+        self.place_discard_hold = False
 
         self.done_pub = rospy.Publisher(self.done_topic, String, queue_size=10)
         self.command_pub = rospy.Publisher(
@@ -159,7 +182,11 @@ class ArmBridge:
         self.recovery_active = False
         self.recovery_state = None
         self.recovery_target_cursor = 0
+        self.recovery_targets = ()
         self.expected_recovery_command = None
+        self.place_discard_active = False
+        self.place_discard_attempts = 0
+        self.place_discard_hold = False
 
         rospy.loginfo(
             "盯住 %s（动作 %s），最多 %d 次尝试。",
@@ -177,6 +204,10 @@ class ArmBridge:
         status, command, reason = match.groups()
         command = command.strip().lower()
         reason = reason.strip()
+
+        if self.place_discard_active:
+            self.handle_place_discard_result(status, command, reason)
+            return
 
         if self.recovery_active:
             self.handle_recovery_result(status, command, reason)
@@ -228,14 +259,27 @@ class ArmBridge:
         # status == failed
         base_reason = reason.split("=")[0]
 
-        # 只有“第三个候选点也没有找到目标”才进入倒车恢复。其他失败继续
-        # 使用原有重试/放行逻辑，不能触发任何负速度。
+        # 三个放置候选点都没有找到目标后，不再在第三点重复做视觉识别。
+        # 保持车辆停车，张爪丢弃物品并确认机械臂回运输零位，成功后才放行。
+        if (
+            self.active_task == "piper_stop_7"
+            and self.active_command == "place3"
+            and base_reason == "target_not_found_at_all_place_points"
+        ):
+            self.begin_place_discard(reason)
+            return
+
+        # 只有“第三点没有安全抓取位姿”（完全未找到或目标仍在边缘）才进入
+        # 倒车恢复。其他失败继续使用原有逻辑，不能触发任何负速度。
         if (
             self.active_task == "piper_stop_4"
             and self.active_command == "pick3"
-            and base_reason == BACKTRACK_PICK3_FAILURE
+            and base_reason in (
+                BACKTRACK_PICK3_FAILURE,
+                BACKTRACK_PICK3_EDGE_FAILURE,
+            )
         ):
-            self.begin_backtrack_recovery()
+            self.begin_backtrack_recovery(base_reason, reason)
             return
 
         if base_reason not in self.retryable:
@@ -273,20 +317,92 @@ class ArmBridge:
         # （piper_task_node.py:266 -> :237），马上重发有概率撞上 busy 被丢弃。
         self.schedule_command(self.active_command, "retry")
 
-    def begin_backtrack_recovery(self):
-        """第三个候选点确认未找到目标：先收臂，再申请倒回第二点。"""
+    def begin_place_discard(self, failure_reason):
+        self.place_discard_active = True
+        self.place_discard_attempts = 1
+        self.place_discard_hold = False
+        self.publish_status("place_discard:1/%d" % self.place_discard_max_attempts)
+        rospy.logerr(
+            "%s 三个放置候选点均失败（%s）：张爪丢弃并回零，确认后放行。",
+            self.active_task,
+            failure_reason,
+        )
+        self.schedule_command("discard_place", "all_place_points_failed")
+
+    def handle_place_discard_result(self, status, command, reason):
+        """处理丢弃物品和回零结果；未确认回零时绝不主动放行。"""
+        # piper_task 忙时结果格式为 rejected:busy:discard_place。
+        if status == "rejected" and command == "busy" and reason == "discard_place":
+            self.schedule_command("discard_place", "discard_rejected_busy")
+            return
+
+        if command != "discard_place":
+            return
+
+        self.last_activity = rospy.Time.now()
+        if status == "success":
+            rospy.loginfo("放置失败收尾完成（%s）：机械臂已回零，恢复跟踪。", reason)
+            self.release("place_discard_complete")
+            return
+
+        if self.place_discard_attempts < self.place_discard_max_attempts:
+            self.place_discard_attempts += 1
+            rospy.logerr(
+                "丢弃后回零失败（%s:%s），重试 %d/%d。",
+                status,
+                reason,
+                self.place_discard_attempts,
+                self.place_discard_max_attempts,
+            )
+            self.publish_status(
+                "place_discard:%d/%d"
+                % (self.place_discard_attempts, self.place_discard_max_attempts)
+            )
+            self.schedule_command("discard_place", "discard_retry")
+            return
+
+        self.place_discard_hold = True
+        self.resend_at = None
+        self.scheduled_command = None
+        self.publish_status("place_discard:stow_failed_hold")
+        rospy.logerr(
+            "丢弃物品后仍无法确认机械臂回零（%s）；保持停车，不主动放行。",
+            reason,
+        )
+
+    def begin_backtrack_recovery(self, failure_type, failure_detail):
+        """第三点安全抓取失败：保持观察位，按失败类型选择倒车复查点。"""
         self.recovery_active = True
         self.recovery_target_cursor = 0
-        self.publish_status("backtrack:preparing_stow")
-        rospy.logwarn(
-            "三个取货候选点均未找到目标：进入 BACKTRACK_RECOVERY，"
-            "先回运输零位，再倒回前两个候选点复查。"
+        if failure_type == BACKTRACK_PICK3_EDGE_FAILURE:
+            self.recovery_targets = BACKTRACK_EDGE_TARGETS
+            edge_direction = failure_detail.partition("=")[2] or "unknown"
+            recovery_text = (
+                "第三点检测到正确目标但位于画面边缘（%s）：保持抓取观察位，"
+                "短距离倒至恢复点复查。" % edge_direction
+            )
+        else:
+            self.recovery_targets = BACKTRACK_TARGETS
+            recovery_text = (
+                "三个取货候选点均未找到目标：保持抓取观察位，"
+                "倒回前两个候选点复查。"
+            )
+        self.publish_status("backtrack:confirming_pick_scan")
+        rospy.logwarn("进入 BACKTRACK_RECOVERY。%s", recovery_text)
+        # 不能在本回调里立刻发布 reverse：final_tracker 也在异步接收同一条
+        # pick3 失败结果，过早申请倒车可能抢在其授权之前被拒。通过机械臂
+        # 观察位确认结果完成握手，再申请倒车；机械臂全程不会回运输零位。
+        self.schedule_recovery_command(
+            "prepare_pick_scan",
+            "confirm_scan_before_initial_backtrack",
+            recovery_state="WAIT_SCAN_FOR_REVERSE",
         )
-        self.schedule_recovery_command("stow", "initial_backtrack_stow")
 
-    def schedule_recovery_command(self, command, reason):
+    def schedule_recovery_command(self, command, reason, recovery_state=None):
         self.expected_recovery_command = command
-        if command == "stow":
+        if recovery_state is not None:
+            self.recovery_state = recovery_state
+        elif command == "stow":
             self.recovery_state = "WAIT_STOW"
         elif command == "prepare_pick_scan":
             self.recovery_state = "WAIT_SCAN"
@@ -297,9 +413,20 @@ class ArmBridge:
         self.schedule_command(command, reason)
 
     def current_recovery_target(self):
-        if not 0 <= self.recovery_target_cursor < len(BACKTRACK_TARGETS):
+        if not 0 <= self.recovery_target_cursor < len(self.recovery_targets):
             return None
-        return BACKTRACK_TARGETS[self.recovery_target_cursor]
+        return self.recovery_targets[self.recovery_target_cursor]
+
+    @staticmethod
+    def is_recovery_pick_miss(reason):
+        """复查点没有安全抓取位姿：继续下一段倒车，而不是误判抓取成功。"""
+        return (
+            reason.startswith("not_here_continue_to_pick")
+            or (
+                reason.startswith("target_at_edge_")
+                and "_continue_to_pick" in reason
+            )
+        )
 
     def request_current_backtrack(self):
         target = self.current_recovery_target()
@@ -311,7 +438,7 @@ class ArmBridge:
         self.last_activity = rospy.Time.now()
         self.backtrack_command_pub.publish(String(data="reverse:%s" % target))
         self.publish_status("backtrack:reversing:%s" % target)
-        rospy.loginfo("机械臂已收回，申请车辆倒车至 %s。", target)
+        rospy.loginfo("机械臂保持抓取观察位，申请车辆倒车至 %s。", target)
 
     def handle_recovery_result(self, status, command, reason):
         """处理回退恢复期间由 /piper_task/command 触发的原子动作结果。"""
@@ -344,6 +471,10 @@ class ArmBridge:
             self.request_current_backtrack()
             return
 
+        if self.recovery_state == "WAIT_SCAN_FOR_REVERSE":
+            self.request_current_backtrack()
+            return
+
         if self.recovery_state == "WAIT_SCAN":
             target = self.current_recovery_target()
             pick_command = BACKTRACK_PICK_COMMANDS.get(target)
@@ -356,15 +487,22 @@ class ArmBridge:
             return
 
         if self.recovery_state == "WAIT_PICK":
-            if reason.startswith("not_here_continue_to_pick"):
-                rospy.logwarn("%s 回退复查仍未找到目标。", self.current_recovery_target())
+            if self.is_recovery_pick_miss(reason):
+                rospy.logwarn(
+                    "%s 回退复查仍没有安全抓取位姿（%s）。",
+                    self.current_recovery_target(),
+                    reason,
+                )
                 self.recovery_target_cursor += 1
                 if self.current_recovery_target() is None:
                     self.begin_abort_round("all_backtrack_points_missed")
                 else:
-                    # 下一段倒车前必须再次收回运输零位。
+                    # 复查未执行任何抓取运动，机械臂仍在观察位。下一段倒车前
+                    # 再确认一次关节反馈，并借该结果与跟踪器完成状态握手。
                     self.schedule_recovery_command(
-                        "stow", "stow_before_next_backtrack"
+                        "prepare_pick_scan",
+                        "confirm_scan_before_next_backtrack",
+                        recovery_state="WAIT_SCAN_FOR_REVERSE",
                     )
                 return
 
@@ -391,7 +529,7 @@ class ArmBridge:
 
         self.last_activity = rospy.Time.now()
         if status == "arrived":
-            rospy.loginfo("车辆已倒达 %s，停车后重新展开取货观察姿态。", target)
+            rospy.loginfo("车辆已倒达 %s，机械臂保持取货观察姿态，停车后复查。", target)
             self.publish_status("backtrack:arrived:%s" % target)
             self.schedule_recovery_command(
                 "prepare_pick_scan", "prepare_scan_at_%s" % target
@@ -477,7 +615,11 @@ class ArmBridge:
         self.recovery_active = False
         self.recovery_state = None
         self.recovery_target_cursor = 0
+        self.recovery_targets = ()
         self.expected_recovery_command = None
+        self.place_discard_active = False
+        self.place_discard_attempts = 0
+        self.place_discard_hold = False
 
     def spin(self):
         rate = rospy.Rate(5)
@@ -516,7 +658,30 @@ class ArmBridge:
                         "%s 超过 %.1fs 无任何结果反馈，机械臂可能异常。",
                         self.active_task, self.action_timeout,
                     )
-                    if self.recovery_active:
+                    if self.place_discard_active:
+                        if self.place_discard_hold:
+                            # 已明确进入安全保持状态，只刷新计时并持续停车。
+                            self.last_activity = rospy.Time.now()
+                        elif self.place_discard_attempts < self.place_discard_max_attempts:
+                            self.place_discard_attempts += 1
+                            self.publish_status(
+                                "place_discard:%d/%d"
+                                % (
+                                    self.place_discard_attempts,
+                                    self.place_discard_max_attempts,
+                                )
+                            )
+                            self.schedule_command(
+                                "discard_place", "discard_silent_retry"
+                            )
+                        else:
+                            self.place_discard_hold = True
+                            self.publish_status("place_discard:silent_hold")
+                            self.last_activity = rospy.Time.now()
+                            rospy.logerr(
+                                "丢弃/回零命令连续无反馈；保持停车，不主动放行。"
+                            )
+                    elif self.recovery_active:
                         if self.recovery_state == "WAIT_ABORT":
                             # 无法确认机械臂已经收回，车辆继续保持停车。
                             self.publish_status("backtrack:abort_timeout_hold")

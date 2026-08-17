@@ -54,6 +54,18 @@ PHASE_ALIGN = "ALIGN_YAW"
 PHASE_TASK = "TASK"
 PHASE_BACKTRACK = "BACKTRACK_RECOVERY"
 
+BACKTRACK_PICK3_FAILURE = "failed:pick3:object_not_found_at_all_pick_points"
+BACKTRACK_PICK3_EDGE_FAILURE_PREFIX = (
+    "failed:pick3:target_at_edge_at_final_pick_point="
+)
+BACKTRACK_RECOVERY_MID = "piper_recovery_mid"
+BACKTRACK_TARGETS = ("piper_stop_3", "piper_stop_2")
+BACKTRACK_EDGE_TARGETS = (
+    BACKTRACK_RECOVERY_MID,
+    "piper_stop_3",
+    "piper_stop_2",
+)
+
 
 class FinalTracker(AvoidanceZoneAStarTest):
     def __init__(self):
@@ -68,8 +80,8 @@ class FinalTracker(AvoidanceZoneAStarTest):
         self.goal_reached_dist = float(rospy.get_param("~goal_reached_dist", 0.05))
 
         self.task_yaw_tolerance = float(rospy.get_param("~task_yaw_tolerance", 0.05))
-        self.task_yaw_max_correction = float(
-            rospy.get_param("~task_yaw_max_correction", 0.10)
+        self.task_yaw_max_angular = max(
+            0.01, float(rospy.get_param("~task_yaw_max_angular", 0.30))
         )
         self.task_yaw_k = float(rospy.get_param("~task_yaw_k", 1.2))
         self.task_yaw_min_angular = float(
@@ -91,6 +103,9 @@ class FinalTracker(AvoidanceZoneAStarTest):
         )
         self.external_task_timeout = float(
             rospy.get_param("~external_task_timeout", 150.0)
+        )
+        self.arm_bridge_status_topic = rospy.get_param(
+            "~arm_bridge_status_topic", "/arm_bridge/status"
         )
 
         # ---------------- 第三个取货点失败后的专用倒车 ----------------
@@ -120,7 +135,25 @@ class FinalTracker(AvoidanceZoneAStarTest):
             0.0, float(rospy.get_param("~reverse_yaw_k", 0.8))
         )
         self.reverse_max_yaw_error = max(
-            0.01, float(rospy.get_param("~reverse_max_yaw_error", 0.10))
+            0.01, float(rospy.get_param("~reverse_max_yaw_error", 0.35))
+        )
+        self.reverse_yaw_slow_threshold = min(
+            self.reverse_max_yaw_error,
+            max(
+                0.0,
+                float(rospy.get_param("~reverse_yaw_slow_threshold", 0.10)),
+            ),
+        )
+        self.reverse_yaw_resume_threshold = min(
+            self.reverse_yaw_slow_threshold,
+            max(
+                0.0,
+                float(rospy.get_param("~reverse_yaw_resume_threshold", 0.05)),
+            ),
+        )
+        self.reverse_heading_correction_timeout = max(
+            0.5,
+            float(rospy.get_param("~reverse_heading_correction_timeout", 4.0)),
         )
         self.reverse_goal_dist = max(
             0.01, float(rospy.get_param("~reverse_goal_dist", 0.04))
@@ -128,11 +161,41 @@ class FinalTracker(AvoidanceZoneAStarTest):
         self.reverse_cross_track_max = max(
             0.02, float(rospy.get_param("~reverse_cross_track_max", 0.10))
         )
+        self.reverse_arrival_cross_track_max = min(
+            self.reverse_cross_track_max,
+            max(
+                self.reverse_goal_dist,
+                float(
+                    rospy.get_param(
+                        "~reverse_arrival_cross_track_max", 0.10
+                    )
+                ),
+            ),
+        )
+        self.reverse_arrival_overshoot_max = max(
+            self.reverse_goal_dist,
+            float(rospy.get_param("~reverse_arrival_overshoot_max", 0.08)),
+        )
         self.reverse_timeout = max(
             1.0, float(rospy.get_param("~reverse_timeout", 12.0))
         )
         self.reverse_max_segment_dist = max(
             0.10, float(rospy.get_param("~reverse_max_segment_dist", 0.80))
+        )
+        self.reverse_recovery_mid_dist = max(
+            self.reverse_goal_dist * 2.0,
+            float(rospy.get_param("~reverse_recovery_mid_dist", 0.14)),
+        )
+        self.reverse_recovery_mid_max_speed = min(
+            self.reverse_max_speed,
+            max(
+                self.reverse_min_speed,
+                float(
+                    rospy.get_param(
+                        "~reverse_recovery_mid_max_speed", 0.04
+                    )
+                ),
+            ),
         )
         self.reverse_accel = max(
             0.01, float(rospy.get_param("~reverse_accel", 0.08))
@@ -178,13 +241,16 @@ class FinalTracker(AvoidanceZoneAStarTest):
             for index in self.task_points
         }
         self.backtrack_authorized = False
-        self.backtrack_expected_targets = ("piper_stop_3", "piper_stop_2")
+        self.backtrack_expected_targets = ()
         self.backtrack_target_cursor = 0
         self.backtrack_target_index = None
+        self.backtrack_target_pose = None
         self.backtrack_target_name = None
         self.backtrack_moving = False
         self.backtrack_started_at = None
         self.backtrack_segment_start = None
+        self.backtrack_heading_correcting = False
+        self.backtrack_heading_correction_started_at = None
         self.reverse_speed_abs = 0.0
         self.reverse_last_time = rospy.Time.now()
         self.warn_task_inside_zone()
@@ -201,6 +267,12 @@ class FinalTracker(AvoidanceZoneAStarTest):
         )
         rospy.Subscriber(
             self.task_done_topic, String, self.task_done_callback, queue_size=10
+        )
+        rospy.Subscriber(
+            self.arm_bridge_status_topic,
+            String,
+            self.arm_bridge_status_callback,
+            queue_size=10,
         )
         rospy.Subscriber(self.skip_topic, String, self.skip_callback, queue_size=10)
         rospy.Subscriber(
@@ -388,12 +460,16 @@ class FinalTracker(AvoidanceZoneAStarTest):
 
     def clear_backtrack_state(self):
         self.backtrack_authorized = False
+        self.backtrack_expected_targets = ()
         self.backtrack_target_cursor = 0
         self.backtrack_target_index = None
+        self.backtrack_target_pose = None
         self.backtrack_target_name = None
         self.backtrack_moving = False
         self.backtrack_started_at = None
         self.backtrack_segment_start = None
+        self.backtrack_heading_correcting = False
+        self.backtrack_heading_correction_started_at = None
         self.reverse_speed_abs = 0.0
         self.reverse_last_time = rospy.Time.now()
 
@@ -473,23 +549,6 @@ class FinalTracker(AvoidanceZoneAStarTest):
             self.enter_task(yaw_error)
             return
 
-        # 机械臂在候选点之间保持 piper_task 的 PICK_SCAN 姿态
-        # （piper_task_node.py:32，joint1=-1.530rad=-87.7°，侧伸）。
-        # 大幅自转会让臂尖横扫，有撞桌子/扫落物品的风险
-        # （规则：货物遗失该轮卸货也 0 分）。
-        # 宁可带朝向误差让视觉补偿，也不要伸着臂大转。
-        # 注意：本上限 0.10rad 是按臂尖伸出约 0.6m 估算的（估值，未实测），
-        # 实测臂尖伸出距离后可据此调整。
-        if abs(yaw_error) > self.task_yaw_max_correction:
-            rospy.logerr(
-                "朝向误差 %.3frad(%.1f°) 超过纠正上限 %.3frad：seq=%d 跳过对齐。"
-                "机械臂可能侧伸，大幅自转有碰撞风险。请检查航迹录制朝向。",
-                yaw_error, math.degrees(yaw_error),
-                self.task_yaw_max_correction, waypoint.seq,
-            )
-            self.enter_task(yaw_error)
-            return
-
         if elapsed >= self.align_timeout:
             rospy.logwarn(
                 "对齐超时 %.1fs：seq=%d 残余朝向误差 %.3frad(%.1f°)，直接进入任务。",
@@ -499,7 +558,9 @@ class FinalTracker(AvoidanceZoneAStarTest):
             return
 
         angular = clamp(
-            self.task_yaw_k * yaw_error, -self.max_angular, self.max_angular
+            self.task_yaw_k * yaw_error,
+            -self.task_yaw_max_angular,
+            self.task_yaw_max_angular,
         )
         # 角速度死区：太小履带不转，误差永远收不敛。
         if abs(angular) < self.task_yaw_min_angular:
@@ -638,13 +699,39 @@ class FinalTracker(AvoidanceZoneAStarTest):
             rospy.loginfo("收到外部完成信号：%s", done)
             self.task_deadline = rospy.Time.now()
 
+    def arm_bridge_status_callback(self, msg):
+        """丢弃/收臂期间禁止150秒兜底越过机械臂回零确认。"""
+        status = (msg.data or "").strip().lower()
+        if not status.startswith("place_discard:"):
+            return
+        if (
+            self.task_phase != PHASE_TASK
+            or not self.pending_is_external
+            or self.pending_task_name != "piper_stop_7"
+        ):
+            return
+        if self.task_deadline is not None:
+            rospy.logwarn(
+                "放置失败进入丢弃/回零安全收尾：关闭本任务自动超时，等待回零确认。"
+            )
+        self.task_deadline = None
+
     # ==================================================================
     # BACKTRACK_RECOVERY：仅第三个取货点指定失败后允许的低速倒车
     # ==================================================================
     def arm_result_callback(self, msg):
         """由跟踪器亲自核验失败结果；没有该授权，任何命令都不能产生负速度。"""
         result = (msg.data or "").strip()
-        if result != "failed:pick3:object_not_found_at_all_pick_points":
+        if result == BACKTRACK_PICK3_FAILURE:
+            expected_targets = BACKTRACK_TARGETS
+            failure_text = "三个候选点均未找到目标"
+        elif result.startswith(BACKTRACK_PICK3_EDGE_FAILURE_PREFIX):
+            expected_targets = BACKTRACK_EDGE_TARGETS
+            edge_direction = result[len(BACKTRACK_PICK3_EDGE_FAILURE_PREFIX):]
+            failure_text = "第三点目标位于画面边缘(%s)" % (
+                edge_direction or "unknown"
+            )
+        else:
             return
         if (
             self.task_phase != PHASE_TASK
@@ -652,14 +739,17 @@ class FinalTracker(AvoidanceZoneAStarTest):
             or self.pending_task_name != "piper_stop_4"
         ):
             rospy.logwarn(
-                "收到 pick3 全点未找到结果，但当前并非 piper_stop_4，拒绝倒车授权。"
+                "收到 pick3 恢复失败结果，但当前并非 piper_stop_4，拒绝倒车授权。"
             )
             return
 
         self.backtrack_authorized = True
+        self.backtrack_expected_targets = expected_targets
         self.backtrack_target_cursor = 0
         rospy.logwarn(
-            "已核验 piper_stop_4 抓取失败：仅本次任务开放 BACKTRACK_RECOVERY。"
+            "已核验 piper_stop_4 抓取失败（%s）："
+            "仅本次任务开放 BACKTRACK_RECOVERY。",
+            failure_text,
         )
 
     def backtrack_command_callback(self, msg):
@@ -697,6 +787,8 @@ class FinalTracker(AvoidanceZoneAStarTest):
         self.stop_robot()
         self.reverse_speed_abs = 0.0
         self.backtrack_moving = False
+        self.backtrack_heading_correcting = False
+        self.backtrack_heading_correction_started_at = None
         rospy.logerr("拒绝/终止倒车至 %s：%s", target or "unknown", reason)
         self.publish_backtrack_event("failed", target or "unknown", reason)
 
@@ -728,11 +820,63 @@ class FinalTracker(AvoidanceZoneAStarTest):
             self.reject_backtrack(target_name, "localization_not_ready")
             return
 
-        target_index = self.backtrack_index(target_name)
-        if target_index is None:
-            self.reject_backtrack(target_name, "target_not_found_in_current_round")
-            return
-        distance = self.distance_to(target_index)
+        target_index = None
+        if target_name == BACKTRACK_RECOVERY_MID:
+            # 恢复点不写入正常航迹，也不会在前进流程触发。它只在已经核验的
+            # pick3 边缘失败后，沿当前点到 pick2 的方向生成一次性短倒目标。
+            anchor_index = self.backtrack_index("piper_stop_3")
+            if anchor_index is None:
+                self.reject_backtrack(
+                    target_name, "recovery_anchor_not_found_in_current_round"
+                )
+                return
+            anchor = self.global_waypoints[anchor_index]
+            anchor_dx = anchor.x - self.current_x
+            anchor_dy = anchor.y - self.current_y
+            anchor_distance = math.hypot(anchor_dx, anchor_dy)
+            # 控制器在距离目标 reverse_goal_dist 时判定到达，因此临时目标
+            # 额外向后放一个 goal_dist，保证车辆实际短倒量接近配置的 0.14m。
+            target_distance = min(
+                self.reverse_recovery_mid_dist + self.reverse_goal_dist,
+                max(0.0, anchor_distance - self.reverse_goal_dist),
+            )
+            if target_distance <= self.reverse_goal_dist:
+                self.reject_backtrack(
+                    target_name,
+                    "insufficient_room_%.3fm_for_mid_recovery" % anchor_distance,
+                )
+                return
+            scale = target_distance / anchor_distance
+            target_pose = (
+                self.current_x + anchor_dx * scale,
+                self.current_y + anchor_dy * scale,
+                self.current_yaw,
+            )
+            # 只保留 anchor index 用于诊断；实际控制始终使用上面的临时位姿。
+            target_index = anchor_index
+            distance = target_distance
+        else:
+            target_index = self.backtrack_index(target_name)
+            if target_index is None:
+                self.reject_backtrack(target_name, "target_not_found_in_current_round")
+                return
+            waypoint = self.global_waypoints[target_index]
+            target_pose = (waypoint.x, waypoint.y, waypoint.yaw)
+            distance = math.hypot(
+                target_pose[0] - self.current_x,
+                target_pose[1] - self.current_y,
+            )
+
+        # 倒车时车头应朝向“目标方向的反方向”。使用本段起点到目标点的
+        # 几何方向作为航向基准，不直接使用录制点的 yaw，避免两个点之间
+        # 很小的录制航向差在短距离倒车中被放大。
+        segment_dx = target_pose[0] - self.current_x
+        segment_dy = target_pose[1] - self.current_y
+        reverse_heading = wrap_to_pi(
+            math.atan2(segment_dy, segment_dx) + math.pi
+        )
+        target_pose = (target_pose[0], target_pose[1], reverse_heading)
+
         if distance > self.reverse_max_segment_dist:
             self.reject_backtrack(
                 target_name,
@@ -741,8 +885,7 @@ class FinalTracker(AvoidanceZoneAStarTest):
             )
             return
 
-        waypoint = self.global_waypoints[target_index]
-        xb, _ = self.point_in_body(waypoint.x, waypoint.y)
+        xb, _ = self.point_in_body(target_pose[0], target_pose[1])
         if xb >= -self.reverse_goal_dist:
             self.reject_backtrack(target_name, "target_not_behind_vehicle")
             return
@@ -750,18 +893,38 @@ class FinalTracker(AvoidanceZoneAStarTest):
         self.stop_robot()
         self.task_phase = PHASE_BACKTRACK
         self.backtrack_target_index = target_index
+        self.backtrack_target_pose = target_pose
         self.backtrack_target_name = target_name
         self.backtrack_moving = True
         self.backtrack_started_at = rospy.Time.now()
         self.backtrack_segment_start = (self.current_x, self.current_y)
+        self.backtrack_heading_correcting = False
+        self.backtrack_heading_correction_started_at = None
         self.reverse_speed_abs = 0.0
         self.reverse_last_time = rospy.Time.now()
-        rospy.logwarn(
-            "BACKTRACK_RECOVERY 开始：%s -> %s，距离 %.3fm；"
-            "该负速度授权只对本段有效。",
-            self.pending_task_name,
-            target_name,
-            distance,
+        if target_name == BACKTRACK_RECOVERY_MID:
+            rospy.logwarn(
+                "BACKTRACK_RECOVERY 开始：%s -> %s，临时目标距离 %.3fm，"
+                "预计实际短倒 %.3fm；该负速度授权只对本段有效。",
+                self.pending_task_name,
+                target_name,
+                distance,
+                max(0.0, distance - self.reverse_goal_dist),
+            )
+        else:
+            rospy.logwarn(
+                "BACKTRACK_RECOVERY 开始：%s -> %s，距离 %.3fm；"
+                "该负速度授权只对本段有效。",
+                self.pending_task_name,
+                target_name,
+                distance,
+            )
+        rospy.loginfo(
+            "倒车段采用几何航向 %.3frad；偏差超过 %.3frad 时停车纠偏，"
+            "回到 %.3frad 内再继续倒退。",
+            reverse_heading,
+            self.reverse_yaw_slow_threshold,
+            self.reverse_yaw_resume_threshold,
         )
 
     def complete_backtrack_recovery(self, outcome):
@@ -784,19 +947,28 @@ class FinalTracker(AvoidanceZoneAStarTest):
         self.publish_task_event("done", self.pending_task_name)
         self.consume_current_task()
 
-    def backtrack_cross_track_error(self):
-        if self.backtrack_segment_start is None or self.backtrack_target_index is None:
-            return float("inf")
+    def backtrack_path_metrics(self):
+        """返回段长、沿段已倒距离、沿段剩余距离和横向偏差。"""
+        if self.backtrack_segment_start is None or self.backtrack_target_pose is None:
+            return (float("inf"),) * 4
         sx, sy = self.backtrack_segment_start
-        target = self.global_waypoints[self.backtrack_target_index]
-        vx = target.x - sx
-        vy = target.y - sy
+        target_x, target_y, _ = self.backtrack_target_pose
+        vx = target_x - sx
+        vy = target_y - sy
         length = math.hypot(vx, vy)
         if length < 1e-6:
-            return 0.0
-        return abs(
+            return 0.0, 0.0, 0.0, 0.0
+        current_dx = self.current_x - sx
+        current_dy = self.current_y - sy
+        progress = (current_dx * vx + current_dy * vy) / length
+        remaining = length - progress
+        cross_track = abs(
             vx * (self.current_y - sy) - vy * (self.current_x - sx)
         ) / length
+        return length, progress, remaining, cross_track
+
+    def backtrack_cross_track_error(self):
+        return self.backtrack_path_metrics()[3]
 
     def reverse_obstacle_data_ready(self):
         if not self.reverse_require_obstacles:
@@ -847,30 +1019,77 @@ class FinalTracker(AvoidanceZoneAStarTest):
         self.last_cmd_angular = msg.angular.z
         self.last_cmd_time = rospy.Time.now()
 
+    def publish_failure_only_heading_correction(self, angular_z):
+        """失败恢复倒车段内原地纠偏；线速度严格保持为零。"""
+        if (
+            not self.backtrack_authorized
+            or self.task_phase != PHASE_BACKTRACK
+            or not self.backtrack_moving
+        ):
+            self.stop_robot()
+            return
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.angular.z = clamp(
+            float(angular_z), -self.reverse_max_angular, self.reverse_max_angular
+        )
+        self.cmd_pub.publish(msg)
+        self.last_cmd_linear = 0.0
+        self.last_cmd_angular = msg.angular.z
+        self.last_cmd_time = rospy.Time.now()
+
     def handle_backtrack(self):
         if not self.backtrack_moving:
             self.stop_robot()
             self.publish_phase("waiting_arm")
             return
-        if self.backtrack_target_index is None or not self.backtrack_target_name:
+        if self.backtrack_target_pose is None or not self.backtrack_target_name:
             self.reject_backtrack("unknown", "missing_target")
             return
 
-        target = self.global_waypoints[self.backtrack_target_index]
-        dx = target.x - self.current_x
-        dy = target.y - self.current_y
+        target_x, target_y, target_yaw = self.backtrack_target_pose
+        dx = target_x - self.current_x
+        dy = target_y - self.current_y
         distance = math.hypot(dx, dy)
         elapsed = (rospy.Time.now() - self.backtrack_started_at).to_sec()
+        segment_length, progress, along_remaining, cross_track = (
+            self.backtrack_path_metrics()
+        )
 
-        if distance <= self.reverse_goal_dist:
+        # 对短距离倒车，二维圆形到达条件会因几厘米横向误差而漏判：车辆已经
+        # 倒够距离后目标转到车侧方，旧逻辑反而报 target_left_rear_half_plane。
+        # 因此同时使用沿本段方向的进度；达到目标前 goal_dist 且横向仍在安全
+        # 范围内就立即停车。对异常定位跳变造成的大幅越界仍保持失败保护。
+        arrived_by_progress = (
+            math.isfinite(along_remaining)
+            and along_remaining <= self.reverse_goal_dist
+            and along_remaining >= -self.reverse_arrival_overshoot_max
+            and cross_track <= self.reverse_arrival_cross_track_max
+        )
+
+        if distance <= self.reverse_goal_dist or arrived_by_progress:
             arrived_name = self.backtrack_target_name
+            arrival_method = (
+                "euclidean"
+                if distance <= self.reverse_goal_dist
+                else "along_track"
+            )
             self.stop_robot()
             self.backtrack_moving = False
+            self.backtrack_heading_correcting = False
+            self.backtrack_heading_correction_started_at = None
             self.reverse_speed_abs = 0.0
             self.backtrack_target_cursor += 1
             rospy.loginfo(
-                "倒车到达 %s：误差 %.3fm，耗时 %.1fs。",
-                arrived_name, distance, elapsed,
+                "倒车到达 %s：判定=%s，二维误差 %.3fm，沿段进度 "
+                "%.3f/%.3fm，横向误差 %.3fm，耗时 %.1fs。",
+                arrived_name,
+                arrival_method,
+                distance,
+                progress,
+                segment_length,
+                cross_track,
+                elapsed,
             )
             self.publish_phase("arrived:%s" % arrived_name)
             self.publish_backtrack_event("arrived", arrived_name)
@@ -881,14 +1100,16 @@ class FinalTracker(AvoidanceZoneAStarTest):
             )
             return
 
-        xb, yb = self.point_in_body(target.x, target.y)
+        xb, yb = self.point_in_body(target_x, target_y)
         if xb >= -self.reverse_goal_dist:
             self.reject_backtrack(
-                self.backtrack_target_name, "target_left_rear_half_plane"
+                self.backtrack_target_name,
+                "target_left_rear_half_plane_progress_%.3f_remaining_%.3f_cross_%.3f"
+                % (progress, along_remaining, cross_track),
             )
             return
 
-        yaw_error = wrap_to_pi(target.yaw - self.current_yaw)
+        yaw_error = wrap_to_pi(target_yaw - self.current_yaw)
         if abs(yaw_error) > self.reverse_max_yaw_error:
             self.reject_backtrack(
                 self.backtrack_target_name,
@@ -897,7 +1118,6 @@ class FinalTracker(AvoidanceZoneAStarTest):
             )
             return
 
-        cross_track = self.backtrack_cross_track_error()
         if cross_track > self.reverse_cross_track_max:
             self.reject_backtrack(
                 self.backtrack_target_name,
@@ -920,12 +1140,64 @@ class FinalTracker(AvoidanceZoneAStarTest):
             )
             return
 
+        now = rospy.Time.now()
+        needs_heading_correction = (
+            abs(yaw_error) > self.reverse_yaw_slow_threshold
+            or (
+                self.backtrack_heading_correcting
+                and abs(yaw_error) > self.reverse_yaw_resume_threshold
+            )
+        )
+        if needs_heading_correction:
+            if not self.backtrack_heading_correcting:
+                self.backtrack_heading_correcting = True
+                self.backtrack_heading_correction_started_at = now
+                rospy.logwarn(
+                    "倒车航向误差 %.3frad：先停车原地纠偏，禁止带偏继续倒退。",
+                    yaw_error,
+                )
+            correction_elapsed = (
+                now - self.backtrack_heading_correction_started_at
+            ).to_sec()
+            if correction_elapsed >= self.reverse_heading_correction_timeout:
+                self.reject_backtrack(
+                    self.backtrack_target_name,
+                    "heading_correction_timeout_%.1fs_error_%.3frad"
+                    % (correction_elapsed, yaw_error),
+                )
+                return
+            self.reverse_speed_abs = 0.0
+            self.reverse_last_time = now
+            correction_angular = clamp(
+                self.reverse_yaw_k * yaw_error,
+                -self.reverse_max_angular,
+                self.reverse_max_angular,
+            )
+            self.publish_failure_only_heading_correction(correction_angular)
+            self.publish_phase(
+                "%s heading_correction yaw=%.3f rear=%.3f"
+                % (self.backtrack_target_name, yaw_error, rear_clear)
+            )
+            return
+
+        if self.backtrack_heading_correcting:
+            rospy.loginfo(
+                "倒车航向已恢复至 %.3frad，继续倒退至 %s。",
+                yaw_error,
+                self.backtrack_target_name,
+            )
+            self.backtrack_heading_correcting = False
+            self.backtrack_heading_correction_started_at = None
+            self.reverse_speed_abs = 0.0
+            self.reverse_last_time = now
+
         desired_abs = clamp(
             self.reverse_k_linear * distance,
             self.reverse_min_speed,
             self.reverse_max_speed,
         )
-        now = rospy.Time.now()
+        if self.backtrack_target_name == BACKTRACK_RECOVERY_MID:
+            desired_abs = min(desired_abs, self.reverse_recovery_mid_max_speed)
         dt = (now - self.reverse_last_time).to_sec()
         if dt <= 0.0 or dt > 0.5:
             dt = 1.0 / max(self.control_rate, 1.0)

@@ -15,7 +15,7 @@ obstacle_source: cloud
 
 # ---------------- 巡航速度 ----------------
 target_speed: 0.35
-max_linear: 0.50          # 必须 >= target_speed
+max_linear: 0.80          # 必须 >= target_speed；比赛巡航速度仍由 target_speed 单独设置
 max_angular: 1.0
 
 # ---------------- 重复航迹进度防跳 ----------------
@@ -48,15 +48,14 @@ approach_switch_dist: 0.55
 approach_k_linear: 0.5
 approach_max_speed: 0.10  # 候选点之间机械臂仍侧伸，限速护臂
 approach_min_speed: 0.04  # 履带静摩擦死区，需实测：发递增速度找轮子起转阈值
-goal_reached_dist: 0.05
+goal_reached_dist: 0.03
 
-# 朝向对齐：机械臂在候选点之间保持 piper_task 的 PICK_SCAN 姿态
-# （piper_task_node.py:32，joint1=-1.530rad=-87.7°，侧伸），大幅自转会让
-# 臂尖横扫，因此设纠正上限。
-# 下面 0.10rad 的依据：假设臂尖伸出 0.6m，转 5.7° 横移约 6cm。
-# 0.6m 是估值、未实测；实测臂尖伸出距离后可重算这个上限。
+# 朝向对齐只作用于 ext:* 任务点；普通巡航点仍由 Pure Pursuit 连续通过，
+# 不停车逐点对齐 CSV yaw。实机已确认机械臂各姿态原地转向不会碰桌，
+# 因此不再用 0.10rad(5.7°) 上限跳过大角度误差，而是始终尝试对齐。
+# 单独限制原地对齐角速度，避免直接使用全局 max_angular=1.0rad/s 猛转。
 task_yaw_tolerance: 0.05        # rad, 约 2.9°
-task_yaw_max_correction: 0.10   # rad, 约 5.7°，超过则跳过对齐直接进任务
+task_yaw_max_angular: 0.30      # rad/s, 约 17.2°/s
 task_yaw_k: 1.2
 task_yaw_min_angular: 0.08      # 角速度死区，需实测
 
@@ -75,9 +74,10 @@ unknown_task_policy: skip
 detect_pause_time: 2.0
 
 # ---------------- 仅抓取全点失败时允许的倒车恢复 ----------------
-# 正常巡航链仍会把所有负线速度压成 0。只有 final_tracker 亲自收到
-# failed:pick3:object_not_found_at_all_pick_points 后，以下专用控制器才会开放
-# 当前一段负速度；其他失败、其他任务点或人工误发 reverse 都会被拒绝。
+# 正常巡航链仍会把所有负线速度压成 0。只有 final_tracker 亲自核验
+# pick3 的“全点未找到”或“第三点目标仍在边缘”失败后，
+# 以下专用控制器才会开放当前一段负速度；其他失败、其他任务点或人工误发
+# reverse 都会被拒绝。边缘失败先短倒到一次性恢复点，恢复点不属于正常航迹。
 backtrack_command_topic: /final_mission/backtrack_command
 backtrack_event_topic: /final_mission/backtrack_event
 arm_result_topic: /piper_task/result
@@ -88,10 +88,23 @@ reverse_max_speed: 0.06
 reverse_accel: 0.08
 reverse_max_angular: 0.12
 reverse_yaw_k: 0.8
-reverse_max_yaw_error: 0.10
+# 航向误差超过0.10rad时线速度立即归零并原地纠偏，回到0.05rad内才恢复倒退。
+# 0.35rad是纠偏仍无法控制时的最终安全上限，不再用0.12rad瞬时误差直接放弃。
+reverse_yaw_slow_threshold: 0.10
+reverse_yaw_resume_threshold: 0.05
+reverse_max_yaw_error: 0.35
+reverse_heading_correction_timeout: 4.0
 reverse_goal_dist: 0.04
 reverse_cross_track_max: 0.10
+# 不再只用二维距离判定到达：沿倒退方向达到目标前4cm且横向偏差不超过
+# 10cm时立即停车。若定位跳变导致越过目标超过8cm，仍按异常终止。
+reverse_arrival_cross_track_max: 0.10
+reverse_arrival_overshoot_max: 0.08
 reverse_timeout: 12.0
+# 第三点检测到目标但位于边缘时，先从第三点短倒约14cm重新观察。
+reverse_recovery_mid_dist: 0.14
+# 14cm短倒单独限速，候选点之间的30~40cm倒车仍使用上面的0.06m/s。
+reverse_recovery_mid_max_speed: 0.04
 # 防止航迹任务标错后向后长距离行驶；实录点间距预计只有 0.30~0.40m。
 reverse_max_segment_dist: 0.80
 

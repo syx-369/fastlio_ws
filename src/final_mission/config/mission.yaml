@@ -14,7 +14,10 @@ flag_min_area: 3000
 # 若实测零位看不到灯，正确做法是在 final_manager.begin_light_wait 里给
 # /piper_task/command 发一个命令，由 piper_task 用它自己的姿态执行，
 # 不要在这里写关节角。
-green_states: ["green"]
+# 只有红灯停车；green / yellow / unknown / none 均属于非红灯。
+# 为防止单帧漏检红灯，连续收到 3 个新的非红灯结果后才放行。
+red_states: ["red"]
+non_red_confirm_frames: 3
 traffic_timeout: 120.0
 traffic_timeout_policy: pass   # pass: 超时放行（避免卡死）; hold: 停在 ERROR
 traffic_weights: /home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt
@@ -33,12 +36,15 @@ arm_task_names:
   - piper_stop_6
   - piper_stop_7
 
-# 普通视觉失败的原地重试次数。pick3 的 object_not_found_at_all_pick_points
-# 是特例：arm_bridge 不在第三点原地重试，而是收臂后申请倒回第二、第一点复查。
+# 普通视觉失败的原地重试次数。pick3 和 place3 是特例：pick3 失败进入
+# 收臂倒车复查；place3 失败直接张爪丢弃并确认回零，不重复视觉识别。
 retry_counts:
   card: 2
   pick: 2
   place: 2
+
+# 三个放置点均失败后，张爪丢弃并回零；回零失败时最多重发次数。
+place_discard_max_attempts: 3
 
 # 只有这些 reason 才重试。其余是逻辑错误或机械故障，重试无意义。
 retryable_reasons:

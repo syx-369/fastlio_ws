@@ -427,6 +427,7 @@ class FinalVision:
     def process_light(self, frame, display):
         self.load_yolo()
         state = "none"
+        detected_states = []
         colors = {
             "red": (0, 0, 255), "green": (0, 255, 0), "yellow": (0, 255, 255),
             "unknown": (128, 128, 128), "none": (255, 255, 255),
@@ -447,21 +448,34 @@ class FinalVision:
                     roi = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
 
                     if "red" in label:
-                        state = "red"
+                        box_state = "red"
                     elif "green" in label:
-                        state = "green"
+                        box_state = "green"
                     elif "yellow" in label:
-                        state = "yellow"
+                        box_state = "yellow"
                     else:
-                        state, _ = self.detect_light_hsv(roi)
+                        box_state, _ = self.detect_light_hsv(roi)
 
-                    color = colors.get(state, (255, 255, 255))
+                    detected_states.append(box_state)
+
+                    color = colors.get(box_state, (255, 255, 255))
                     cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
                     cv2.putText(
-                        display, "%s %.2f" % (state, score),
+                        display, "%s %.2f" % (box_state, score),
                         (x1, max(20, y1 - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
                     )
+
+                # 同一画面存在多个检测框时，红灯拥有最高优先级：只要看见
+                # 任意红灯就发布 red，避免后处理框把状态覆盖成 green/none。
+                if "red" in detected_states:
+                    state = "red"
+                elif "green" in detected_states:
+                    state = "green"
+                elif "yellow" in detected_states:
+                    state = "yellow"
+                elif detected_states:
+                    state = "unknown"
         else:
             state, _ = self.detect_light_hsv(frame)
 
