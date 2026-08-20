@@ -41,6 +41,12 @@ class FinalManager:
         self.traffic_light_tasks = self.param_list(
             "~traffic_light_tasks", ["traffic_light"]
         )
+        self.skip_second_light_after_first_red = bool(
+            rospy.get_param("~skip_second_light_after_first_red", True)
+        )
+        self.task_bypass_topic = rospy.get_param(
+            "~task_bypass_topic", "/final_mission/task_bypass_next"
+        )
         self.red_states = self.param_list("~red_states", ["red"])
         self.non_red_confirm_frames = max(
             1, int(rospy.get_param("~non_red_confirm_frames", 3))
@@ -71,6 +77,9 @@ class FinalManager:
         self.non_red_confirm_count = 0
         self.pending_light_task = None
         self.light_wait_started = None
+        self.light_visit_count = 0
+        self.first_light_red_seen = False
+        self.second_light_bypass_sent = False
         self.finish_seen_at = None
 
         self.state_pub = rospy.Publisher(
@@ -84,6 +93,9 @@ class FinalManager:
         )
         self.done_pub = rospy.Publisher(
             self.task_done_topic, String, queue_size=10
+        )
+        self.task_bypass_pub = rospy.Publisher(
+            self.task_bypass_topic, String, queue_size=5
         )
         self.stop_pub = rospy.Publisher(self.cmd_topic, Twist, queue_size=5)
 
@@ -229,6 +241,7 @@ class FinalManager:
     # ------------------------------------------------------------------
     def begin_light_wait(self, task):
         # 机械臂零位（TRANSPORT_JOINTS 全 0）下相机前视，看灯无需动臂。
+        self.light_visit_count += 1
         self.pending_light_task = task
         self.light_wait_started = rospy.Time.now()
         # 只使用切换到 light 模式之后收到的新识别结果，避免初始/旧的 none
@@ -238,8 +251,30 @@ class FinalManager:
         self.vision_control_pub.publish(String(data="light"))
         self.set_state("WAIT_LIGHT")
         rospy.loginfo(
-            "红绿灯判定：仅红灯停车，连续 %d 帧非红灯后放行。",
+            "第 %d 个红绿灯识别点：仅红灯停车，连续 %d 帧非红灯后放行。",
+            self.light_visit_count,
             self.non_red_confirm_frames,
+        )
+
+    def bypass_second_light(self):
+        """第一识别点见红后，让跟踪器把下一个同名灯点并入普通巡航。"""
+        if (
+            not self.skip_second_light_after_first_red
+            or self.light_visit_count != 1
+            or self.first_light_red_seen
+        ):
+            return
+
+        self.first_light_red_seen = True
+        if self.second_light_bypass_sent or not self.pending_light_task:
+            return
+
+        self.task_bypass_pub.publish(String(data=self.pending_light_task))
+        self.second_light_bypass_sent = True
+        rospy.logwarn(
+            "第一个红绿灯识别点已看到红灯：下一个 %s 将作为普通跟踪点通过，"
+            "不减速停车、不对齐、不启动识别。",
+            self.pending_light_task,
         )
 
     def release_light(self, task, reason):
@@ -270,6 +305,7 @@ class FinalManager:
                 if self.traffic_light_sample_seq != self.last_evaluated_light_seq:
                     self.last_evaluated_light_seq = self.traffic_light_sample_seq
                     if self.traffic_light_state in self.red_states:
+                        self.bypass_second_light()
                         self.non_red_confirm_count = 0
                         rospy.loginfo_throttle(1.0, "检测到红灯，继续停车。")
                     else:

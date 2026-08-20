@@ -14,9 +14,30 @@ cloud_topic: /cloud_registered
 obstacle_source: cloud
 
 # ---------------- 巡航速度 ----------------
-target_speed: 0.35
-max_linear: 0.80          # 必须 >= target_speed；比赛巡航速度仍由 target_speed 单独设置
-max_angular: 1.0
+target_speed: 1.00
+max_linear: 1.00          # 必须 >= target_speed；比赛巡航速度仍由 target_speed 单独设置
+# 1m/s 巡航时降低高速转向峰值，减少避障出口左右摆动。
+max_angular: 0.80
+
+# 1m/s 时增大前视距离，避免目标点过近造成 Pure Pursuit 左右反复修正。
+lookahead_distance: 0.80
+min_lookahead: 0.60
+max_lookahead: 1.80
+lookahead_speed_ratio: 1.80
+
+# 0.8m/s 时动态前视约 1.44m。A* 路径点间隔约 0.30m，执行 7 点可提供
+# 约 1.8m 的连续路径，避免原来的 5 点短于前视距离而频繁追逐段尾。
+execute_points: 7
+
+# 连续参考线使用更长视野和轻度更强的平滑，提升高速出避障区的衔接稳定性。
+reference_horizon: 6.0
+reference_smoothing_window: 7
+
+# 避障出口继续由 A* 引导一段距离，确认回到原路线后再释放到普通跟踪。
+zone_handoff_distance: 2.00
+zone_handoff_early_release: 0.60
+# 只有基本回到原路线中心后才提前交给连续跟踪；到达完整交接终点仍会兜底释放。
+zone_handoff_lateral_tolerance: 0.10
 
 # ---------------- 重复航迹进度防跳 ----------------
 # 这里只限制“车辆当前属于哪一段 CSV”的匹配窗口，不改变 A* 的 4m 参考线、
@@ -26,6 +47,13 @@ progress_search_ahead: 12
 progress_search_back: 10
 progress_max_advance: 1.00
 progress_heading_tolerance: 0.70
+
+# 区外任务点后重接路线时，1.0~1.8m 的轻度投影前跳连续确认 3 帧；
+# 确认期间限速而非立即锁停。超过 1.8m 仍按定位/跨圈异常锁停。
+progress_recovery_max_advance: 1.80
+progress_recovery_samples: 3
+progress_recovery_tolerance: 0.30
+progress_recovery_speed: 0.25
 
 # A* 绕行时车辆会暂时离开原始 CSV，重新靠回路线的一刻可能产生 1m 以上
 # 的合理进度跳变。只在 avoid_start..avoid_end（含出口交接走廊）内允许：
@@ -43,12 +71,25 @@ progress_zone_confirm_tolerance: 0.30
 #   approach_switch_dist 必须 > 最大点间距，让候选点之间全程走 P 控制点到点，
 #   避免在 Pure Pursuit 与 P 控制之间反复切换。
 #   task_trigger_margin 必须 > approach_switch_dist，留出从巡航平滑降速的距离。
-task_trigger_margin: 0.80
+task_trigger_margin: 1.80
 approach_switch_dist: 0.55
 approach_k_linear: 0.5
 approach_max_speed: 0.10  # 候选点之间机械臂仍侧伸，限速护臂
 approach_min_speed: 0.04  # 履带静摩擦死区，需实测：发递增速度找轮子起转阈值
 goal_reached_dist: 0.03
+# 逼近阶段单独限制转向，避免继承全局 1.0rad/s 后在桌边猛摆。
+approach_max_angular: 0.30
+# 10cm 内逐步放弃追逐瞬时目标方向，改为保持 CSV 记录航向；
+# 防止接近 3cm 停车阈值时，毫米级横向残差被 atan2 放大成大角度。
+approach_near_goal_dist: 0.10
+
+# 1m/s 巡航时需要比原 0.60m/s^2 更高的受控减速能力，
+# 才能在 approach_switch_dist 前降至靠站速度。
+max_linear_decel: 1.00
+# 限制角速度变化率，避免高速时左右扭摆。
+max_angular_accel: 0.60
+# 普通路径目标方向过大时，先按该斜率受控减速再原地转向；障碍急停不使用此斜率。
+heading_stop_decel: 1.50
 
 # 朝向对齐只作用于 ext:* 任务点；普通巡航点仍由 Pure Pursuit 连续通过，
 # 不停车逐点对齐 CSV yaw。实机已确认机械臂各姿态原地转向不会碰桌，
@@ -68,6 +109,8 @@ align_timeout: 8.0
 task_event_topic: /waypoint_task_event
 task_done_topic: /waypoint_task_done
 skip_topic: /piper_task/navigation_skip
+# 总控在第一红绿灯点见红后，用此话题把下一个灯点改为普通巡航点。
+task_bypass_topic: /final_mission/task_bypass_next
 # 单次 card 约 21s、pick 约 24s，最多 3 次尝试 → 留足重试时间。
 external_task_timeout: 150.0
 unknown_task_policy: skip

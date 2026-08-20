@@ -65,6 +65,8 @@ BACKTRACK_EDGE_TARGETS = (
     "piper_stop_3",
     "piper_stop_2",
 )
+BACKTRACK_PLACE3_FAILURE = "failed:place3:target_not_found_at_all_place_points"
+PLACE_BACKTRACK_TARGETS = ("piper_stop_6", "piper_stop_5")
 
 
 class FinalTracker(AvoidanceZoneAStarTest):
@@ -78,6 +80,13 @@ class FinalTracker(AvoidanceZoneAStarTest):
         self.approach_max_speed = float(rospy.get_param("~approach_max_speed", 0.10))
         self.approach_min_speed = float(rospy.get_param("~approach_min_speed", 0.04))
         self.goal_reached_dist = float(rospy.get_param("~goal_reached_dist", 0.05))
+        self.approach_max_angular = max(
+            0.01, float(rospy.get_param("~approach_max_angular", 0.30))
+        )
+        self.approach_near_goal_dist = max(
+            self.goal_reached_dist,
+            float(rospy.get_param("~approach_near_goal_dist", 0.10)),
+        )
 
         self.task_yaw_tolerance = float(rospy.get_param("~task_yaw_tolerance", 0.05))
         self.task_yaw_max_angular = max(
@@ -100,6 +109,9 @@ class FinalTracker(AvoidanceZoneAStarTest):
         )
         self.skip_topic = rospy.get_param(
             "~skip_topic", "/piper_task/navigation_skip"
+        )
+        self.task_bypass_topic = rospy.get_param(
+            "~task_bypass_topic", "/final_mission/task_bypass_next"
         )
         self.external_task_timeout = float(
             rospy.get_param("~external_task_timeout", 150.0)
@@ -241,6 +253,8 @@ class FinalTracker(AvoidanceZoneAStarTest):
             for index in self.task_points
         }
         self.backtrack_authorized = False
+        self.backtrack_mode = None
+        self.backtrack_owner_task = None
         self.backtrack_expected_targets = ()
         self.backtrack_target_cursor = 0
         self.backtrack_target_index = None
@@ -275,6 +289,12 @@ class FinalTracker(AvoidanceZoneAStarTest):
             queue_size=10,
         )
         rospy.Subscriber(self.skip_topic, String, self.skip_callback, queue_size=10)
+        rospy.Subscriber(
+            self.task_bypass_topic,
+            String,
+            self.task_bypass_callback,
+            queue_size=10,
+        )
         rospy.Subscriber(
             self.backtrack_command_topic,
             String,
@@ -358,6 +378,8 @@ class FinalTracker(AvoidanceZoneAStarTest):
                       self.goal_reached_dist, self.task_yaw_tolerance)
         rospy.loginfo("逼近限速       : %.2f~%.2f m/s",
                       self.approach_min_speed, self.approach_max_speed)
+        rospy.loginfo("逼近转向/近点  : %.2f rad/s / %.2fm",
+                      self.approach_max_angular, self.approach_near_goal_dist)
         rospy.loginfo("=" * 60)
 
     def publish_phase(self, detail=""):
@@ -460,6 +482,8 @@ class FinalTracker(AvoidanceZoneAStarTest):
 
     def clear_backtrack_state(self):
         self.backtrack_authorized = False
+        self.backtrack_mode = None
+        self.backtrack_owner_task = None
         self.backtrack_expected_targets = ()
         self.backtrack_target_cursor = 0
         self.backtrack_target_index = None
@@ -500,22 +524,44 @@ class FinalTracker(AvoidanceZoneAStarTest):
         # P 控制直奔目标坐标。相比 Pure Pursuit 的前视点追踪，直线逼近
         # 横向外摆更小 —— 候选点之间机械臂侧伸，这一点很关键。
         target_heading = math.atan2(dy, dx)
-        heading_error = wrap_to_pi(target_heading - self.current_yaw)
+        point_heading_error = wrap_to_pi(target_heading - self.current_yaw)
+
+        # 距离目标很近时，几毫米横向残差会把 atan2 方向角突然放大，
+        # 造成履带左右来回修正。进入近点区后，平滑地从“朝向目标坐标”
+        # 过渡到“目标点记录航向”；到停车阈值附近基本只保持最终航向。
+        heading_error = point_heading_error
+        if distance < self.approach_near_goal_dist:
+            near_span = max(
+                self.approach_near_goal_dist - self.goal_reached_dist, 1e-6
+            )
+            point_weight = clamp(
+                (distance - self.goal_reached_dist) / near_span, 0.0, 1.0
+            )
+            final_yaw_error = wrap_to_pi(waypoint.yaw - self.current_yaw)
+            heading_error = wrap_to_pi(
+                final_yaw_error
+                + point_weight
+                * wrap_to_pi(point_heading_error - final_yaw_error)
+            )
 
         linear = clamp(
             self.approach_k_linear * distance,
             self.approach_min_speed,
             self.approach_max_speed,
         )
-        angular = clamp(1.2 * heading_error, -self.max_angular, self.max_angular)
+        angular = clamp(
+            1.2 * heading_error,
+            -self.approach_max_angular,
+            self.approach_max_angular,
+        )
 
         # 航向偏差过大时先转正再前进，避免画弧线撞到桌子。
         if abs(heading_error) > 0.8:
             linear = 0.0
             angular = clamp(
                 self.task_yaw_k * heading_error,
-                -self.max_angular,
-                self.max_angular,
+                -self.approach_max_angular,
+                self.approach_max_angular,
             )
             if abs(angular) < self.task_yaw_min_angular:
                 angular = math.copysign(self.task_yaw_min_angular, heading_error)
@@ -702,7 +748,7 @@ class FinalTracker(AvoidanceZoneAStarTest):
     def arm_bridge_status_callback(self, msg):
         """丢弃/收臂期间禁止150秒兜底越过机械臂回零确认。"""
         status = (msg.data or "").strip().lower()
-        if not status.startswith("place_discard:"):
+        if not status.startswith(("place_backtrack:", "place_discard:")):
             return
         if (
             self.task_phase != PHASE_TASK
@@ -712,43 +758,59 @@ class FinalTracker(AvoidanceZoneAStarTest):
             return
         if self.task_deadline is not None:
             rospy.logwarn(
-                "放置失败进入丢弃/回零安全收尾：关闭本任务自动超时，等待回零确认。"
+                "放置失败进入倒车/降级/回零安全恢复："
+                "关闭本任务自动超时，等待完整恢复确认。"
             )
         self.task_deadline = None
 
     # ==================================================================
-    # BACKTRACK_RECOVERY：仅第三个取货点指定失败后允许的低速倒车
+    # BACKTRACK_RECOVERY：仅第三个抓取/放置点指定失败后允许的低速倒车
     # ==================================================================
     def arm_result_callback(self, msg):
         """由跟踪器亲自核验失败结果；没有该授权，任何命令都不能产生负速度。"""
         result = (msg.data or "").strip()
         if result == BACKTRACK_PICK3_FAILURE:
             expected_targets = BACKTRACK_TARGETS
+            mode = "pick"
+            owner_task = "piper_stop_4"
             failure_text = "三个候选点均未找到目标"
         elif result.startswith(BACKTRACK_PICK3_EDGE_FAILURE_PREFIX):
             expected_targets = BACKTRACK_EDGE_TARGETS
+            mode = "pick"
+            owner_task = "piper_stop_4"
             edge_direction = result[len(BACKTRACK_PICK3_EDGE_FAILURE_PREFIX):]
             failure_text = "第三点目标位于画面边缘(%s)" % (
                 edge_direction or "unknown"
             )
+        elif result == BACKTRACK_PLACE3_FAILURE:
+            expected_targets = PLACE_BACKTRACK_TARGETS
+            mode = "place"
+            owner_task = "piper_stop_7"
+            failure_text = "三个放置候选点均未找到正确目标"
         else:
             return
         if (
             self.task_phase != PHASE_TASK
             or not self.pending_is_external
-            or self.pending_task_name != "piper_stop_4"
+            or self.pending_task_name != owner_task
         ):
             rospy.logwarn(
-                "收到 pick3 恢复失败结果，但当前并非 piper_stop_4，拒绝倒车授权。"
+                "收到 %s 恢复失败结果，但当前并非 %s，拒绝倒车授权。",
+                mode,
+                owner_task,
             )
             return
 
         self.backtrack_authorized = True
+        self.backtrack_mode = mode
+        self.backtrack_owner_task = owner_task
         self.backtrack_expected_targets = expected_targets
         self.backtrack_target_cursor = 0
         rospy.logwarn(
-            "已核验 piper_stop_4 抓取失败（%s）："
+            "已核验 %s 的 %s 失败（%s）："
             "仅本次任务开放 BACKTRACK_RECOVERY。",
+            owner_task,
+            mode,
             failure_text,
         )
 
@@ -763,7 +825,7 @@ class FinalTracker(AvoidanceZoneAStarTest):
             self.complete_backtrack_recovery(value)
 
     def backtrack_index(self, target_name):
-        """在当前 piper_stop_4 之前、本轮 piper_stop_1 之后查找目标点。"""
+        """在当前失败点之前、本轮 piper_stop_1 之后查找回退目标点。"""
         if self.active_task is None:
             return None
         active_index = self.active_task[0]
@@ -800,13 +862,16 @@ class FinalTracker(AvoidanceZoneAStarTest):
             else None
         )
         if not self.backtrack_authorized:
-            self.reject_backtrack(target_name, "not_authorized_by_pick3_failure")
+            self.reject_backtrack(target_name, "not_authorized_by_arm_failure")
             return
         if (
-            self.pending_task_name != "piper_stop_4"
+            self.pending_task_name != self.backtrack_owner_task
             or self.task_phase not in (PHASE_TASK, PHASE_BACKTRACK)
         ):
-            self.reject_backtrack(target_name, "not_waiting_at_pick3")
+            self.reject_backtrack(
+                target_name,
+                "not_waiting_at_%s" % (self.backtrack_owner_task or "owner_task"),
+            )
             return
         if self.backtrack_moving:
             self.reject_backtrack(target_name, "already_reversing")
@@ -928,18 +993,22 @@ class FinalTracker(AvoidanceZoneAStarTest):
         )
 
     def complete_backtrack_recovery(self, outcome):
-        """恢复成功或确认 no_payload 后，消费原 piper_stop_4 并恢复只前进跟踪。"""
-        if outcome not in ("payload", "no_payload"):
+        """核验恢复结果，消费原失败任务点并恢复只前进跟踪。"""
+        allowed_outcomes = {
+            "pick": ("payload", "no_payload"),
+            "place": ("placed", "discarded"),
+        }
+        if outcome not in allowed_outcomes.get(self.backtrack_mode, ()):
             rospy.logerr("忽略未知的恢复结果：%s", outcome)
             return
         if (
-            self.pending_task_name != "piper_stop_4"
+            self.pending_task_name != self.backtrack_owner_task
             or self.task_phase not in (PHASE_TASK, PHASE_BACKTRACK)
         ):
             rospy.logerr("忽略无对应失败任务的恢复完成命令：%s", outcome)
             return
         if not self.backtrack_authorized:
-            rospy.logerr("忽略未由 pick3 指定失败授权的恢复完成命令。")
+            rospy.logerr("忽略未由指定机械臂失败授权的恢复完成命令。")
             return
 
         self.stop_robot()
@@ -1218,6 +1287,39 @@ class FinalTracker(AvoidanceZoneAStarTest):
             "%s d=%.3f cross=%.3f rear=%.3f"
             % (self.backtrack_target_name, distance, cross_track, rear_clear)
         )
+
+    # ==================================================================
+    # 动态旁路：把尚未到达的任务点恢复成普通巡航点
+    # ==================================================================
+    def task_bypass_callback(self, msg):
+        """旁路下一个指定外部任务；当前正在执行的任务绝不会被旁路。"""
+        requested_name = (msg.data or "").strip().lower()
+        if not requested_name:
+            return
+
+        start = self.task_cursor
+        if (
+            self.active_task is not None
+            and start < len(self.task_points)
+            and self.task_points[start] == self.active_task[0]
+        ):
+            start += 1
+
+        for cursor in range(start, len(self.task_points)):
+            index = self.task_points[cursor]
+            waypoint = self.global_waypoints[index]
+            name = self.external_name(getattr(waypoint, "task", "none"))
+            if name and name.lower() == requested_name:
+                waypoint.task = "none"
+                rospy.logwarn(
+                    "动态旁路：%s@seq%d 已并入普通巡航，"
+                    "不会触发减速、停车、对齐或外部握手。",
+                    name,
+                    waypoint.seq,
+                )
+                return
+
+        rospy.logwarn("动态旁路未找到后续任务：%s", requested_name)
 
     # ==================================================================
     # navigation_skip：抓/放成功后，后续候选点无需停车

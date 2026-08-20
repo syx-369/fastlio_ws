@@ -15,12 +15,20 @@ flag_min_area: 3000
 # /piper_task/command 发一个命令，由 piper_task 用它自己的姿态执行，
 # 不要在这里写关节角。
 # 只有红灯停车；green / yellow / unknown / none 均属于非红灯。
-# 为防止单帧漏检红灯，连续收到 3 个新的非红灯结果后才放行。
+# 为防止少量帧漏检红灯，连续收到 5 个新的非红灯结果后才放行。
 red_states: ["red"]
-non_red_confirm_frames: 3
+non_red_confirm_frames: 5
+# 若第一个红绿灯识别点曾检测到红灯，则通知跟踪器把下一个同名识别点
+# 动态改为普通巡航点。第一个点仍会停车等待红灯转为非红后再放行。
+skip_second_light_after_first_red: true
+task_bypass_topic: /final_mission/task_bypass_next
 traffic_timeout: 120.0
 traffic_timeout_policy: pass   # pass: 超时放行（避免卡死）; hold: 停在 ERROR
 traffic_weights: /home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt
+# 前后两个灯可能同时入镜：忽略远处过小的框，只判定当前识别点附近的灯。
+# 录好正式轨迹后可根据窗口里 ignored:far / 有效框的尺寸微调。
+traffic_min_box_height: 35
+traffic_min_box_area: 1000
 
 # ---------------- 机械臂任务映射（仅备查，代码不读） ----------------
 # 与 piper_task/config/task_config.yaml 的 vehicle_stop_actions 一致。
@@ -36,14 +44,15 @@ arm_task_names:
   - piper_stop_6
   - piper_stop_7
 
-# 普通视觉失败的原地重试次数。pick3 和 place3 是特例：pick3 失败进入
-# 收臂倒车复查；place3 失败直接张爪丢弃并确认回零，不重复视觉识别。
+# 普通视觉失败的原地重试次数。pick3 和 place3 是特例：第三点失败后都
+# 进入受授权的低速倒车复查。place3 会倒回 place2/place1 找正确目标；
+# 仍失败则尝试任意安全识别物体，最后才张爪丢弃并确认回零。
 retry_counts:
   card: 2
   pick: 2
   place: 2
 
-# 三个放置点均失败后，张爪丢弃并回零；回零失败时最多重发次数。
+# 放置倒车复查、任意目标放置均失败后，张爪丢弃并回零；失败重发次数。
 place_discard_max_attempts: 3
 
 # 只有这些 reason 才重试。其余是逻辑错误或机械故障，重试无意义。

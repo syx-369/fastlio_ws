@@ -74,6 +74,14 @@ class FinalVision:
         self.flag_min_area = int(rospy.get_param("~flag_min_area", 3000))
         self.min_saturation = int(rospy.get_param("~min_saturation", 70))
         self.min_value = int(rospy.get_param("~min_value", 90))
+        # 一条路上前后两个灯可能同时入镜。只使用达到近距离尺寸的检测框，
+        # 避免在第一个识别点把远处第二个灯的红色误当成当前灯。
+        self.traffic_min_box_height = max(
+            0, int(rospy.get_param("~traffic_min_box_height", 35))
+        )
+        self.traffic_min_box_area = max(
+            0, int(rospy.get_param("~traffic_min_box_area", 1000))
+        )
 
         self.mode = str(rospy.get_param("~initial_mode", "flag")).strip().lower()
         self.flag_confirm_count = 0
@@ -445,6 +453,22 @@ class FinalVision:
                     score = float(boxes.conf[i].cpu().numpy())
                     cls_id = int(boxes.cls[i].cpu().numpy())
                     label = str(self.names.get(cls_id, cls_id)).lower()
+                    box_width = max(0, x2 - x1)
+                    box_height = max(0, y2 - y1)
+                    box_area = box_width * box_height
+
+                    if (
+                        box_height < self.traffic_min_box_height
+                        or box_area < self.traffic_min_box_area
+                    ):
+                        cv2.rectangle(display, (x1, y1), (x2, y2), (96, 96, 96), 1)
+                        cv2.putText(
+                            display, "ignored:far %.2f" % score,
+                            (x1, max(20, y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (96, 96, 96), 1,
+                        )
+                        continue
+
                     roi = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
 
                     if "red" in label:
@@ -466,8 +490,8 @@ class FinalVision:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
                     )
 
-                # 同一画面存在多个检测框时，红灯拥有最高优先级：只要看见
-                # 任意红灯就发布 red，避免后处理框把状态覆盖成 green/none。
+                # 只在通过近距离尺寸过滤的当前灯候选框中判定；候选框里
+                # 任意红灯仍拥有最高优先级，确保红灯不会被其他状态覆盖。
                 if "red" in detected_states:
                     state = "red"
                 elif "green" in detected_states:

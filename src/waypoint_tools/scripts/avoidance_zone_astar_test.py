@@ -123,6 +123,26 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         self.zone_progress_candidate_s = None
         self.zone_progress_candidate_segment = None
         self.zone_progress_candidate_count = 0
+        # 区外在任务点后重新接回航迹时，投影可能有轻度前跳。该情况先
+        # 限速并连续确认，而不是把比赛流程直接锁死。
+        self.progress_recovery_max_advance = max(
+            self.progress_max_advance,
+            float(rospy.get_param("~progress_recovery_max_advance", 1.80)),
+        )
+        self.progress_recovery_samples = max(
+            2, int(rospy.get_param("~progress_recovery_samples", 3))
+        )
+        self.progress_recovery_tolerance = max(
+            0.05,
+            float(rospy.get_param("~progress_recovery_tolerance", 0.30)),
+        )
+        self.progress_recovery_speed = max(
+            0.0, float(rospy.get_param("~progress_recovery_speed", 0.25))
+        )
+        self.progress_recovery_active = False
+        self.progress_recovery_candidate_s = None
+        self.progress_recovery_candidate_segment = None
+        self.progress_recovery_candidate_count = 0
 
         self.planner_requested = self.planner_enabled
         if not self.planner_requested:
@@ -164,10 +184,15 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         self.max_angular_accel = max(
             0.05, float(rospy.get_param("~max_angular_accel", 1.50))
         )
+        self.heading_stop_decel = max(
+            self.max_linear_decel,
+            float(rospy.get_param("~heading_stop_decel", 1.50)),
+        )
         self.last_cmd_linear = 0.0
         self.last_cmd_angular = 0.0
         self.last_cmd_time = rospy.Time.now()
         self.force_stop_cmd = False
+        self.force_linear_stop_cmd = False
 
         self.zone_state_pub = rospy.Publisher(
             "~avoidance_zone_active", Bool, queue_size=1, latch=True
@@ -192,11 +217,13 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             self.reference_smoothing_window,
         )
         rospy.loginfo(
-            "Speed profile: cruise=%.2f min=%.2f accel=%.2f decel=%.2f angular_accel=%.2f",
+            "Speed profile: cruise=%.2f min=%.2f accel=%.2f decel=%.2f "
+            "heading_stop_decel=%.2f angular_accel=%.2f",
             self.nominal_target_speed,
             self.min_tracking_speed,
             self.max_linear_accel,
             self.max_linear_decel,
+            self.heading_stop_decel,
             self.max_angular_accel,
         )
         rospy.loginfo(
@@ -647,6 +674,55 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         self.zone_progress_candidate_segment = None
         self.zone_progress_candidate_count = 0
 
+    def clear_progress_recovery_candidate(self):
+        """清除区外轻度进度跳变的恢复候选状态。"""
+        self.progress_recovery_active = False
+        self.progress_recovery_candidate_s = None
+        self.progress_recovery_candidate_segment = None
+        self.progress_recovery_candidate_count = 0
+
+    def confirm_progress_recovery(self, projected_s, segment_index):
+        """对任务点后等可预期的轻度前跳做连续确认后再接回航迹。"""
+        consistent = (
+            self.progress_recovery_candidate_s is not None
+            and abs(projected_s - self.progress_recovery_candidate_s)
+            <= self.progress_recovery_tolerance
+        )
+        if consistent:
+            self.progress_recovery_candidate_count += 1
+        else:
+            self.progress_recovery_candidate_count = 1
+
+        self.progress_recovery_active = True
+        self.progress_recovery_candidate_s = projected_s
+        self.progress_recovery_candidate_segment = segment_index
+        if self.progress_recovery_candidate_count >= self.progress_recovery_samples:
+            rospy.logwarn(
+                "Route progress recovery accepted after %d consistent samples: "
+                "%.2fm -> %.2fm (advance %.2fm, segment=%d).",
+                self.progress_recovery_candidate_count,
+                self.route_progress_s,
+                projected_s,
+                projected_s - self.route_progress_s,
+                segment_index,
+            )
+            self.clear_progress_recovery_candidate()
+            return True
+
+        rospy.logwarn_throttle(
+            1.0,
+            "Route progress recovery pending: %.2fm -> %.2fm "
+            "(advance %.2fm, sample %d/%d, segment=%d); limit speed to %.2fm/s.",
+            self.route_progress_s,
+            projected_s,
+            projected_s - self.route_progress_s,
+            self.progress_recovery_candidate_count,
+            self.progress_recovery_samples,
+            segment_index,
+            self.progress_recovery_speed,
+        )
+        return False
+
     def confirm_zone_progress_rejoin(self, projected_s, segment_index):
         """连续确认 A* 绕行后重新落回 CSV 的中等进度跳变。
 
@@ -701,6 +777,7 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         self.last_route_lateral = lateral
         if lateral > self.progress_lateral_limit:
             self.clear_zone_progress_candidate()
+            self.clear_progress_recovery_candidate()
             rospy.logwarn_throttle(
                 1.0,
                 "Route projection is %.2fm away (limit %.2fm); keep monotonic progress %.2fm.",
@@ -718,8 +795,15 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             ):
                 if not self.confirm_zone_progress_rejoin(projected_s, segment_index):
                     return
+            elif (
+                not self.zone_active
+                and progress_advance <= self.progress_recovery_max_advance
+            ):
+                if not self.confirm_progress_recovery(projected_s, segment_index):
+                    return
             else:
                 self.clear_zone_progress_candidate()
+                self.clear_progress_recovery_candidate()
                 active_limit = (
                     self.progress_zone_max_advance
                     if self.zone_active
@@ -741,6 +825,7 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
                 return
         else:
             self.clear_zone_progress_candidate()
+            self.clear_progress_recovery_candidate()
 
         self.route_progress_s = max(self.route_progress_s, projected_s)
 
@@ -782,9 +867,16 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             limited_angular = 0.0
         else:
             desired_linear = float(linear_x)
-            if desired_linear <= 0.0:
-                # 原地转向或安全停车时，线速度立即归零。
+            if self.force_linear_stop_cmd:
                 limited_linear = 0.0
+            elif desired_linear <= 0.0:
+                # 目标方向突然变大时按受控斜率减速，避免滚动 A* 段尾或
+                # 出区换轨造成指令从巡航速度瞬间跳到零。真正的障碍急停
+                # 通过 publish_safety_cmd() 设置 force_linear_stop_cmd，仍立即零速。
+                limited_linear = max(
+                    0.0,
+                    self.last_cmd_linear - self.heading_stop_decel * dt,
+                )
             else:
                 delta = desired_linear - self.last_cmd_linear
                 rate = self.max_linear_accel if delta >= 0.0 else self.max_linear_decel
@@ -801,6 +893,14 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         self.last_cmd_angular = limited_angular
         self.last_cmd_time = now
         super().publish_cmd(limited_linear, limited_angular)
+
+    def publish_safety_cmd(self, angular_z):
+        """Keep obstacle stop immediate while retaining the escape rotation."""
+        self.force_linear_stop_cmd = True
+        try:
+            super().publish_safety_cmd(angular_z)
+        finally:
+            self.force_linear_stop_cmd = False
 
     def stop_robot(self):
         self.force_stop_cmd = True
@@ -826,6 +926,10 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             return
         # 保持中间航点恒定巡航；只在整条 CSV 的最终点附近连续减速。
         self.target_speed = self.nominal_target_speed
+        if self.progress_recovery_active:
+            self.target_speed = min(
+                self.target_speed, self.progress_recovery_speed
+            )
         if self.has_odom and self.global_index == len(self.global_waypoints) - 1:
             final_waypoint = self.global_waypoints[-1]
             final_distance = math.hypot(

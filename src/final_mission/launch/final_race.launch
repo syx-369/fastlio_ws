@@ -22,7 +22,7 @@
   -->
 
   <arg name="csv_path"/>
-  <arg name="target_speed" default="0.35"/>
+  <arg name="target_speed" default="1.00"/>
   <arg name="cmd_topic" default="/smoother_cmd_vel"/>
   <arg name="wait_for_start" default="true"/>
   <arg name="auto_start" default="false"/>
