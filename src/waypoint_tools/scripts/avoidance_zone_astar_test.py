@@ -184,15 +184,10 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         self.max_angular_accel = max(
             0.05, float(rospy.get_param("~max_angular_accel", 1.50))
         )
-        self.heading_stop_decel = max(
-            self.max_linear_decel,
-            float(rospy.get_param("~heading_stop_decel", 1.50)),
-        )
         self.last_cmd_linear = 0.0
         self.last_cmd_angular = 0.0
         self.last_cmd_time = rospy.Time.now()
         self.force_stop_cmd = False
-        self.force_linear_stop_cmd = False
 
         self.zone_state_pub = rospy.Publisher(
             "~avoidance_zone_active", Bool, queue_size=1, latch=True
@@ -217,13 +212,11 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             self.reference_smoothing_window,
         )
         rospy.loginfo(
-            "Speed profile: cruise=%.2f min=%.2f accel=%.2f decel=%.2f "
-            "heading_stop_decel=%.2f angular_accel=%.2f",
+            "Speed profile: cruise=%.2f min=%.2f accel=%.2f decel=%.2f angular_accel=%.2f",
             self.nominal_target_speed,
             self.min_tracking_speed,
             self.max_linear_accel,
             self.max_linear_decel,
-            self.heading_stop_decel,
             self.max_angular_accel,
         )
         rospy.loginfo(
@@ -867,16 +860,9 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
             limited_angular = 0.0
         else:
             desired_linear = float(linear_x)
-            if self.force_linear_stop_cmd:
+            if desired_linear <= 0.0:
+                # 原地转向或安全停车时，线速度立即归零。
                 limited_linear = 0.0
-            elif desired_linear <= 0.0:
-                # 目标方向突然变大时按受控斜率减速，避免滚动 A* 段尾或
-                # 出区换轨造成指令从巡航速度瞬间跳到零。真正的障碍急停
-                # 通过 publish_safety_cmd() 设置 force_linear_stop_cmd，仍立即零速。
-                limited_linear = max(
-                    0.0,
-                    self.last_cmd_linear - self.heading_stop_decel * dt,
-                )
             else:
                 delta = desired_linear - self.last_cmd_linear
                 rate = self.max_linear_accel if delta >= 0.0 else self.max_linear_decel
@@ -893,14 +879,6 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         self.last_cmd_angular = limited_angular
         self.last_cmd_time = now
         super().publish_cmd(limited_linear, limited_angular)
-
-    def publish_safety_cmd(self, angular_z):
-        """Keep obstacle stop immediate while retaining the escape rotation."""
-        self.force_linear_stop_cmd = True
-        try:
-            super().publish_safety_cmd(angular_z)
-        finally:
-            self.force_linear_stop_cmd = False
 
     def stop_robot(self):
         self.force_stop_cmd = True

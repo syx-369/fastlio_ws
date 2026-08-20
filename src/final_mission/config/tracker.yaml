@@ -25,19 +25,13 @@ min_lookahead: 0.60
 max_lookahead: 1.80
 lookahead_speed_ratio: 1.80
 
-# 0.8m/s 时动态前视约 1.44m。A* 路径点间隔约 0.30m，执行 7 点可提供
-# 约 1.8m 的连续路径，避免原来的 5 点短于前视距离而频繁追逐段尾。
-execute_points: 7
-
 # 连续参考线使用更长视野和轻度更强的平滑，提升高速出避障区的衔接稳定性。
 reference_horizon: 6.0
 reference_smoothing_window: 7
 
 # 避障出口继续由 A* 引导一段距离，确认回到原路线后再释放到普通跟踪。
-zone_handoff_distance: 2.00
+zone_handoff_distance: 1.50
 zone_handoff_early_release: 0.60
-# 只有基本回到原路线中心后才提前交给连续跟踪；到达完整交接终点仍会兜底释放。
-zone_handoff_lateral_tolerance: 0.10
 
 # ---------------- 重复航迹进度防跳 ----------------
 # 这里只限制“车辆当前属于哪一段 CSV”的匹配窗口，不改变 A* 的 4m 参考线、
@@ -87,9 +81,7 @@ approach_near_goal_dist: 0.10
 # 才能在 approach_switch_dist 前降至靠站速度。
 max_linear_decel: 1.00
 # 限制角速度变化率，避免高速时左右扭摆。
-max_angular_accel: 0.60
-# 普通路径目标方向过大时，先按该斜率受控减速再原地转向；障碍急停不使用此斜率。
-heading_stop_decel: 1.50
+max_angular_accel: 0.80
 
 # 朝向对齐只作用于 ext:* 任务点；普通巡航点仍由 Pure Pursuit 连续通过，
 # 不停车逐点对齐 CSV yaw。实机已确认机械臂各姿态原地转向不会碰桌，

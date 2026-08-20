@@ -907,14 +907,6 @@ class PurePursuitAStarFollower:
         msg.angular.z = angular_z
         self.cmd_pub.publish(msg)
 
-    def publish_safety_cmd(self, angular_z):
-        """Publish an immediate stop requested by the reactive safety layer.
-
-        Zone-aware subclasses may smooth ordinary heading corrections, but a
-        real obstacle stop must remain distinguishable and take effect now.
-        """
-        self.publish_cmd(0.0, angular_z)
-
     def stop_robot(self):
         self.publish_cmd(0.0, 0.0)
 
@@ -1097,27 +1089,10 @@ class PurePursuitAStarFollower:
         if abs(alpha) > self.rotate_in_place_angle:
             linear_x = 0.0
             angular_z = clamp(self.rotate_k_angular * alpha, -self.max_angular, self.max_angular)
-            rospy.logwarn_throttle(
-                0.5,
-                "Motion limit [heading_rotate]: alpha=%.2frad > %.2frad, "
-                "request controlled stop and rotate.",
-                alpha,
-                self.rotate_in_place_angle,
-            )
         elif abs(alpha) > self.heading_hard_slow_angle:
             linear_x *= 0.30
-            rospy.logwarn_throttle(
-                0.5,
-                "Motion limit [heading_hard_slow]: alpha=%.2frad speed_scale=0.30.",
-                alpha,
-            )
         elif abs(alpha) > self.heading_slow_angle:
             linear_x *= 0.60
-            rospy.logwarn_throttle(
-                0.5,
-                "Motion limit [heading_slow]: alpha=%.2frad speed_scale=0.60.",
-                alpha,
-            )
 
         min_front, min_side_clear = self.safety_distances()
         if min_side_clear < self.side_safety_radius * 2.0 or min_front < self.safety_slow_dist:
@@ -1133,7 +1108,7 @@ class PurePursuitAStarFollower:
                 self.local_path = []
                 self.local_index = 0
                 self.blocked_since = rospy.Time.now()
-            self.publish_safety_cmd(self.preferred_escape_turn(alpha))
+            self.publish_cmd(0.0, self.preferred_escape_turn(alpha))
             return
         if min_front < self.safety_stop_dist:
             rospy.logwarn_throttle(
@@ -1145,34 +1120,18 @@ class PurePursuitAStarFollower:
                 self.local_path = []
                 self.local_index = 0
                 self.blocked_since = rospy.Time.now()
-            self.publish_safety_cmd(self.preferred_escape_turn(alpha))
+            self.publish_cmd(0.0, self.preferred_escape_turn(alpha))
             return
         self.clear_blocked_state()
         if min_front < self.safety_slow_dist:
             scale = (min_front - self.safety_stop_dist) / (
                 self.safety_slow_dist - self.safety_stop_dist + 1e-6
             )
-            scale = clamp(scale, 0.0, 1.0)
-            linear_x *= scale
-            rospy.logwarn_throttle(
-                0.5,
-                "Motion limit [front_slow]: front_clear=%.2fm "
-                "range=[%.2f, %.2f] speed_scale=%.2f.",
-                min_front,
-                self.safety_stop_dist,
-                self.safety_slow_dist,
-                scale,
-            )
+            linear_x *= clamp(scale, 0.0, 1.0)
         if min_side_clear < self.side_safety_radius:
             # Side wall is close but not necessarily blocking. Slow down instead
             # of freezing the robot; front safety still stops true head-on risk.
             linear_x *= 0.45
-            rospy.logwarn_throttle(
-                0.5,
-                "Motion limit [side_slow]: side_clear=%.2fm < %.2fm speed_scale=0.45.",
-                min_side_clear,
-                self.side_safety_radius,
-            )
 
         self.publish_cmd(linear_x, angular_z)
 
