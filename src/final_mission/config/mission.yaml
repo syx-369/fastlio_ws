@@ -24,7 +24,7 @@ skip_second_light_after_first_red: true
 task_bypass_topic: /final_mission/task_bypass_next
 traffic_timeout: 120.0
 traffic_timeout_policy: pass   # pass: 超时放行（避免卡死）; hold: 停在 ERROR
-traffic_weights: /home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt
+traffic_weights: /home/user/fastlio_ws/src/waypoint_tools/config/tl_0820.pt
 # 前后两个灯可能同时入镜：忽略远处过小的框，只判定当前识别点附近的灯。
 # 录好正式轨迹后可根据窗口里 ignored:far / 有效框的尺寸微调。
 traffic_min_box_height: 35

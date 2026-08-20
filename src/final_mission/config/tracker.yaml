@@ -41,6 +41,15 @@ zone_handoff_early_release: 0.60
 zone_handoff_lateral_tolerance: 0.10
 
 # ---------------- 避障区反应式安全层 ----------------
+# 锥筒底座通常比激光点云命中的锥体上部更宽；把 A* 障碍膨胀从默认
+# 0.55m 增至 0.65m，为 0.35m 车体半宽额外保留约 0.30m 规划余量。
+inflation_radius: 0.65
+# 前方检测范围需要覆盖 0.35m 车体半宽及前角余量，避免锥筒绕过前方
+# 停车检测后才以侧向障碍被发现。
+front_half_width: 0.42
+# 侧向障碍在距离车体边缘 0.25m 时提前限速，降低跟踪切内弯造成的擦碰风险。
+side_safety_radius: 0.25
+
 # 0.8m/s、最大减速度 1.0m/s^2 时理论制动路程约 0.32m；叠加点云/控制
 # 延迟和 0.28m 停车门限后，从前保险杠外 0.70m 开始按净空比例减速。
 safety_slow_dist: 0.70
@@ -80,6 +89,9 @@ progress_zone_confirm_tolerance: 0.30
 #   避免在 Pure Pursuit 与 P 控制之间反复切换。
 #   task_trigger_margin 必须 > approach_switch_dist，留出从巡航平滑降速的距离。
 task_trigger_margin: 1.80
+# 红绿灯点单独缩短减速触发距离；0.8m/s 时从 1.40m 到 0.55m 逼近区
+# 仍有 0.85m 用于平稳降至 0.10m/s，不改变最后的精确停靠参数。
+traffic_light_trigger_margin: 0.80
 approach_switch_dist: 0.55
 approach_k_linear: 0.5
 approach_max_speed: 0.10  # 候选点之间机械臂仍侧伸，限速护臂

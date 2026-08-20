@@ -62,7 +62,7 @@ class FinalVision:
         )
         self.weights = rospy.get_param(
             "~traffic_weights",
-            "/home/user/fastlio_ws/src/waypoint_tools/config/traffic_light.pt",
+            "/home/user/fastlio_ws/src/waypoint_tools/config/tl_0820.pt",
         )
         self.conf = float(rospy.get_param("~conf", 0.4))
         self.imgsz = int(rospy.get_param("~imgsz", 640))

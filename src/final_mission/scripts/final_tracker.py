@@ -76,6 +76,14 @@ class FinalTracker(AvoidanceZoneAStarTest):
         # ---------------- 停靠参数 ----------------
         self.task_trigger_margin = float(rospy.get_param("~task_trigger_margin", 0.80))
         self.approach_switch_dist = float(rospy.get_param("~approach_switch_dist", 0.55))
+        requested_light_margin = float(
+            rospy.get_param("~traffic_light_trigger_margin", 1.40)
+        )
+        # 红绿灯可以比机械臂任务更晚减速，但必须在精确逼近区之前留出余量。
+        self.traffic_light_trigger_margin = min(
+            self.task_trigger_margin,
+            max(self.approach_switch_dist + 0.05, requested_light_margin),
+        )
         self.approach_k_linear = float(rospy.get_param("~approach_k_linear", 0.5))
         self.approach_max_speed = float(rospy.get_param("~approach_max_speed", 0.10))
         self.approach_min_speed = float(rospy.get_param("~approach_min_speed", 0.04))
@@ -374,6 +382,7 @@ class FinalTracker(AvoidanceZoneAStarTest):
             )
         rospy.loginfo("触发余量/逼近  : %.2fm / %.2fm",
                       self.task_trigger_margin, self.approach_switch_dist)
+        rospy.loginfo("红绿灯减速触发  : %.2fm", self.traffic_light_trigger_margin)
         rospy.loginfo("到位判据       : %.3fm / %.3frad",
                       self.goal_reached_dist, self.task_yaw_tolerance)
         rospy.loginfo("逼近限速       : %.2f~%.2f m/s",
@@ -1382,9 +1391,12 @@ class FinalTracker(AvoidanceZoneAStarTest):
         # ---- 检查是否该进入停靠 ----
         index = self.next_task_index()
         if index is not None:
+            waypoint = self.global_waypoints[index]
             distance = self.distance_to(index)
+            trigger_margin = self.task_trigger_margin
+            if self.external_name(waypoint.task) == "traffic_light":
+                trigger_margin = self.traffic_light_trigger_margin
             if distance <= self.approach_switch_dist:
-                waypoint = self.global_waypoints[index]
                 rospy.loginfo(
                     "进入逼近：seq=%d task=%s 距离 %.3fm",
                     waypoint.seq, waypoint.task, distance,
@@ -1398,8 +1410,8 @@ class FinalTracker(AvoidanceZoneAStarTest):
             # ---- SLOWDOWN：巡航中按距离线性降速 ----
             # 父类 control_step 会在开头把 target_speed 重置为 nominal_target_speed，
             # 所以这里改 nominal 而不是 target。
-            if distance <= self.task_trigger_margin:
-                span = max(self.task_trigger_margin - self.approach_switch_dist, 1e-6)
+            if distance <= trigger_margin:
+                span = max(trigger_margin - self.approach_switch_dist, 1e-6)
                 ratio = clamp(
                     (distance - self.approach_switch_dist) / span, 0.0, 1.0
                 )
