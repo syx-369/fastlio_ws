@@ -639,34 +639,25 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         return best[1], best[0], best[2]
 
     def select_planning_waypoint(self):
-        """沿路线弧长选目标；区内目标绝不越过 avoid_end。"""
+        """区外跟踪连续 CSV；区内始终朝避障区出口滚动规划。"""
         if self.global_index >= len(self.global_waypoints):
             return None
+    
         if not self.zone_active:
             target_index = min(
                 len(self.global_waypoints) - 1,
                 max(self.global_index, self.reference_end_index),
             )
             return self.global_waypoints[target_index]
-
+    
         zone_bounds = self.active_zone_bounds()
         if zone_bounds is None:
             return self.global_waypoints[self.global_index]
+    
+        # 区内的中间 CSV 点只用于进度判断，不再作为 A* 目标。
         _, zone_end = zone_bounds
-        handoff_limit_index, handoff_limit_s = self.zone_handoff_target(zone_end)
-        target_s = min(
-            handoff_limit_s,
-            self.route_progress_s + max(
-                self.planning_goal_min_dist,
-                self.lookahead_distance * 2.0,
-            ),
-        )
-        target_index = bisect_left(self.route_cumulative_s, target_s)
-        target_index = min(
-            handoff_limit_index,
-            max(self.global_index, target_index),
-        )
-        return self.global_waypoints[target_index]
+        exit_index, _ = self.zone_handoff_target(zone_end)
+        return self.global_waypoints[exit_index]
 
     def clear_zone_progress_candidate(self):
         """清除避障区路线重投影的连续确认状态。"""
