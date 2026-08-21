@@ -639,25 +639,66 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
         return best[1], best[0], best[2]
 
     def select_planning_waypoint(self):
-        """区外跟踪连续 CSV；区内始终朝避障区出口滚动规划。"""
+        """沿路线弧长选目标；被障碍占据的区内目标直接向后跳过。"""
         if self.global_index >= len(self.global_waypoints):
             return None
-    
+
         if not self.zone_active:
             target_index = min(
                 len(self.global_waypoints) - 1,
                 max(self.global_index, self.reference_end_index),
             )
             return self.global_waypoints[target_index]
-    
+
         zone_bounds = self.active_zone_bounds()
         if zone_bounds is None:
             return self.global_waypoints[self.global_index]
-    
-        # 区内的中间 CSV 点只用于进度判断，不再作为 A* 目标。
+
         _, zone_end = zone_bounds
-        exit_index, _ = self.zone_handoff_target(zone_end)
-        return self.global_waypoints[exit_index]
+        handoff_limit_index, handoff_limit_s = self.zone_handoff_target(zone_end)
+        target_s = min(
+            handoff_limit_s,
+            self.route_progress_s + max(
+                self.planning_goal_min_dist,
+                self.lookahead_distance * 2.0,
+            ),
+        )
+        target_index = bisect_left(self.route_cumulative_s, target_s)
+        target_index = min(
+            handoff_limit_index,
+            max(self.global_index, target_index),
+        )
+
+        # 如果锥桶正好压在本轮 CSV 引导点上，不再让底层仅在该点周围
+        # 寻找临时自由格；直接沿路线跳过连续被占用的点，把 A* 目标放到
+        # 障碍之后。这里只改变规划目标，不篡改全局路线进度。
+        obstacles = self.get_obstacles_snapshot()
+        first_blocked_index = target_index
+        while (
+            target_index < handoff_limit_index
+            and self.waypoint_occupied(
+                self.global_waypoints[target_index], obstacles
+            )
+        ):
+            target_index += 1
+        if target_index > first_blocked_index:
+            rospy.logwarn_throttle(
+                1.0,
+                "Skip occupied CSV A* target seq=%d..%d; use seq=%d.",
+                self.global_waypoints[first_blocked_index].seq,
+                self.global_waypoints[target_index - 1].seq,
+                self.global_waypoints[target_index].seq,
+            )
+        return self.global_waypoints[target_index]
+
+    def waypoint_occupied(self, waypoint, obstacles):
+        """目标是否落在与 A* 一致的障碍膨胀范围内。"""
+        radius = self.inflation_radius + 0.5 * self.grid_resolution
+        radius_sq = radius * radius
+        return any(
+            (ox - waypoint.x) ** 2 + (oy - waypoint.y) ** 2 <= radius_sq
+            for ox, oy in obstacles
+        )
 
     def clear_zone_progress_candidate(self):
         """清除避障区路线重投影的连续确认状态。"""
