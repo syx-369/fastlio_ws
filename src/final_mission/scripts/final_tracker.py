@@ -1059,20 +1059,33 @@ class FinalTracker(AvoidanceZoneAStarTest):
 
     def rear_clearance(self):
         """返回车尾保险杠到后方走廊内最近障碍物的净距离。"""
-        obstacles = self.get_obstacles_snapshot()
+        # Backtrack happens at task stations outside the avoidance zone. Bypass
+        # zone gating but retain the freshness check in reverse_obstacle_data_ready().
+        obstacles = self.get_cached_obstacles_snapshot()
         if not obstacles:
             return float("inf")
         cy = math.cos(self.current_yaw)
         sy = math.sin(self.current_yaw)
         rear_edge = -self.footprint_rear
+        point_radius = self.obstacle_uncertainty_radius()
         minimum = float("inf")
         for ox, oy in obstacles:
             rx = ox - self.current_x
             ry = oy - self.current_y
             xb = cy * rx + sy * ry
             yb = -sy * rx + cy * ry
-            clearance = rear_edge - xb
-            if clearance > 0.0 and abs(yb) <= self.reverse_safety_half_width:
+            if (
+                -self.footprint_rear - point_radius
+                <= xb
+                <= self.footprint_front + point_radius
+                and abs(yb) <= self.footprint_half_width + point_radius
+            ):
+                return 0.0
+            clearance = rear_edge - xb - point_radius
+            if (
+                clearance >= 0.0
+                and abs(yb) <= self.reverse_safety_half_width + point_radius
+            ):
                 minimum = min(minimum, clearance)
         return minimum
 
@@ -1086,11 +1099,19 @@ class FinalTracker(AvoidanceZoneAStarTest):
         ):
             self.stop_robot()
             return
-        msg = Twist()
-        msg.linear.x = max(-self.reverse_max_speed, float(linear_x))
-        msg.angular.z = clamp(
+        requested_angular = clamp(
             float(angular_z), -self.reverse_max_angular, self.reverse_max_angular
         )
+        if self.angular_direction_change_requires_stop(requested_angular):
+            rospy.logwarn_throttle(
+                0.5,
+                "Backtrack steering direction change: publish zero before reversing.",
+            )
+            self.stop_robot()
+            return
+        msg = Twist()
+        msg.linear.x = max(-self.reverse_max_speed, float(linear_x))
+        msg.angular.z = requested_angular
         self.cmd_pub.publish(msg)
         # 正常跟踪恢复时从零速重新起步，不继承负速度历史。
         self.last_cmd_linear = msg.linear.x
@@ -1106,11 +1127,28 @@ class FinalTracker(AvoidanceZoneAStarTest):
         ):
             self.stop_robot()
             return
-        msg = Twist()
-        msg.linear.x = 0.0
-        msg.angular.z = clamp(
+        requested_angular = clamp(
             float(angular_z), -self.reverse_max_angular, self.reverse_max_angular
         )
+        if self.angular_direction_change_requires_stop(requested_angular):
+            rospy.logwarn_throttle(
+                0.5,
+                "Backtrack heading direction change: publish zero before reversing.",
+            )
+            self.stop_robot()
+            return
+        if not self.rotation_sweep_is_clear(
+            requested_angular, self.get_cached_obstacles_snapshot()
+        ):
+            rospy.logerr_throttle(
+                0.5,
+                "Backtrack heading correction inhibited by body-sweep obstacle.",
+            )
+            self.stop_robot()
+            return
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.angular.z = requested_angular
         self.cmd_pub.publish(msg)
         self.last_cmd_linear = 0.0
         self.last_cmd_angular = msg.angular.z

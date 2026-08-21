@@ -888,6 +888,16 @@ class AvoidanceZoneAStarTest(PurePursuitAStarFollower):
                 -self.max_angular_accel * dt,
                 self.max_angular_accel * dt,
             )
+            # Never slew through zero into the opposite rotation direction in
+            # one command. Sweep checks are directional; emit one explicit zero
+            # cycle before a new direction can be considered and published.
+            if (
+                abs(self.last_cmd_angular) > 1e-6
+                and abs(float(angular_z)) > 1e-6
+                and self.last_cmd_angular * float(angular_z) < 0.0
+                and self.last_cmd_angular * limited_angular <= 0.0
+            ):
+                limited_angular = 0.0
 
         self.last_cmd_linear = limited_linear
         self.last_cmd_angular = limited_angular

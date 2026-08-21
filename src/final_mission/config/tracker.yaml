@@ -13,6 +13,43 @@ cmd_topic: /smoother_cmd_vel
 cloud_topic: /cloud_registered
 obstacle_source: cloud
 
+# ---------------- 车辆与传感器坐标 ----------------
+# /Odometry 和录制 CSV 都以车头 MID360/IMU 为原点。跟踪器会把实时位姿和
+# 每个 CSV 航点一起后移 lidar_x，统一到车体几何中心后再做规划与安全判断。
+vehicle_length: 0.80
+vehicle_width: 0.70
+lidar_x: 0.40
+lidar_y: 0.0
+lidar_z: 0.50
+# FAST-LIO状态原点（IMU）到车体中心的平面偏移可独立标定；当前先沿用
+# 已验证的车头中心0.40m近似，不与scan使用的雷达安装位姿强耦合。
+odom_origin_x: 0.40
+odom_origin_y: 0.0
+# 故障区实测 IMU原点到局部地面的偏移约0.42~0.49m；先采用较小的
+# 0.42m保守排除地面。因此不同坡段的有效下限约为地面上6~13cm，并非
+# 全程精确6cm。该值不能直接换成雷达安装高0.50m。
+odom_ground_offset: 0.42
+odom_pose_is_lidar: true
+footprint_front: 0.40
+footprint_rear: 0.40
+footprint_half_width: 0.35
+# 点云自滤波只覆盖裸车体约0.69×0.57m，不得复用更大的安全包络；否则
+# 车体外0~5cm的真实障碍会被删掉，旋转扫掠保护也看不到它。
+self_filter_front: 0.345
+self_filter_rear: 0.345
+self_filter_half_width: 0.285
+self_filter_padding: 0.0
+
+# /cloud_registered 是世界系点云。按地面以上 6cm~1.40m 取障碍；每个点
+# 需要在12cm邻域内得到至少2点支持。该判据跨越8cm体素边界；每个支持
+# 体素只缓存一个几何中心，同时规划和安全层把5.7cm半对角计入包络，既不
+# 因质心向外偏移高估净空，也避免密集点云把A*阻塞数百毫秒。
+min_obstacle_height: 0.06
+max_obstacle_height: 1.40
+obstacle_voxel_size: 0.08
+obstacle_support_radius: 0.12
+min_points_per_voxel: 2
+
 # ---------------- 巡航速度 ----------------
 target_speed: 1.00
 max_linear: 1.00          # 必须 >= target_speed；比赛巡航速度仍由 target_speed 单独设置
@@ -28,6 +65,13 @@ lookahead_speed_ratio: 1.80
 # 0.8m/s 时动态前视约 1.44m。A* 路径点间隔约 0.30m，执行 7 点可提供
 # 约 1.8m 的连续路径，避免原来的 5 点短于前视距离而频繁追逐段尾。
 execute_points: 7
+# 实际下发的A*前缀最多容忍5cm栅格量化误差；若前缀需要先倒退则拒绝，
+# 因为正常跟踪器不会发布负线速度，也不能跳过退路后直追障碍后的路径点。
+prefix_backtrack_tolerance: 0.05
+# A*计算期间若车辆继续移动超过10cm或转过0.10rad，结果按过期丢弃；
+# 未超限时仍会再用最新里程计复核执行前缀，避免接受已经落到车后的路径。
+plan_accept_translation_tolerance: 0.10
+plan_accept_yaw_tolerance: 0.10
 
 # 连续参考线使用更长视野和轻度更强的平滑，提升高速出避障区的衔接稳定性。
 reference_horizon: 6.0
@@ -41,20 +85,33 @@ zone_handoff_early_release: 0.60
 zone_handoff_lateral_tolerance: 0.10
 
 # ---------------- 避障区反应式安全层 ----------------
-# 锥筒底座通常比激光点云命中的锥体上部更宽；把 A* 障碍膨胀从默认
-# 0.55m 增至 0.65m，为 0.35m 车体半宽额外保留约 0.30m 规划余量。
-inflation_radius: 0.65
+# A* 是圆形质点模型，必须包住安全层矩形前停走廊的远角：
+# hypot(front 0.40 + stop 0.28, front_half_width 0.42)≈0.80m。
+# 代码会强制不低于车体扫掠、前停和侧向包络，任何 fallback 不再降级。
+inflation_radius: 0.80
+planner_clearance: 0.12
+# 首轮修复验证先把避障区限到 0.60m/s；区外仍使用启动参数指定的巡航速度。
+# 0.60m/s 时动态前视约 1.08m，小于首个 1.34m 绕行目标，减少跨折线切角。
+avoidance_max_speed: 0.60
 # 前方检测范围需要覆盖 0.35m 车体半宽及前角余量，避免锥筒绕过前方
 # 停车检测后才以侧向障碍被发现。
 front_half_width: 0.42
 # 侧向障碍在距离车体边缘 0.25m 时提前限速，降低跟踪切内弯造成的擦碰风险。
 side_safety_radius: 0.25
+# 侧净空8cm以内立即全零，不允许仍以0.45倍速度贴边前进。
+side_stop_dist: 0.08
 
 # 0.8m/s、最大减速度 1.0m/s^2 时理论制动路程约 0.32m；叠加点云/控制
 # 延迟和 0.28m 停车门限后，从前保险杠外 0.70m 开始按净空比例减速。
 safety_slow_dist: 0.70
 safety_stop_dist: 0.28
 safety_emergency_dist: 0.16
+
+# 原地旋转前检查未来 0.35rad 的矩形车体扫掠；8cm 内有点则线、角速度
+# 都立即归零，避免“前方已停、车尾/侧面仍扫进障碍”。
+rotation_stop_clearance: 0.08
+rotation_sweep_angle: 0.35
+rotation_sweep_step: 0.05
 
 # ---------------- 重复航迹进度防跳 ----------------
 # 这里只限制“车辆当前属于哪一段 CSV”的匹配窗口，不改变 A* 的 4m 参考线、

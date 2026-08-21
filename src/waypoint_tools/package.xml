@@ -75,6 +75,7 @@
   <exec_depend>teb_local_planner</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>
   <exec_depend>global_planner</exec_depend>
+  <test_depend>python3-nose</test_depend>
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

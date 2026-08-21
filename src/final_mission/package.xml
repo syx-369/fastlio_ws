@@ -20,4 +20,5 @@
   <!-- 跟踪器继承 waypoint_tools/scripts 下的 avoidance_zone_astar_test.py -->
   <exec_depend>waypoint_tools</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
+  <test_depend>python3-nose</test_depend>
 </package>
